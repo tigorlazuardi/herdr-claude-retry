@@ -21,8 +21,8 @@
 | T4 socket-client | B2 | M | sonnet | ../herdr-claude-retry-001-T4 | done | 0 | needs T0 findings |
 | T5 account-resolution | B2 | M | sonnet | ../herdr-claude-retry-001-T5 | done | 0 | UUID→jsonl primary |
 | T6 core-daemon-logic | B3 | L | opus | — | done | 2 | PASS after 1 REJECT (inject-reason gate + per-pane subs) |
-| T7 cli-logging | B4 | M | sonnet | — | doing | 0 | telemetry table in SPEC.mdx |
-| T8 acceptance-packaging | B5 | M | sonnet | — | todo | 0 | e2e vs live herdr; no npm publish |
+| T7 cli-logging | B4 | M | sonnet | — | done | 0 | LOW: os.homedir() preferred over HOME env (non-blocking) |
+| T8 acceptance-packaging | B5 | M | sonnet | — | doing | 0 | e2e vs live herdr; no npm publish |
 
 `status` ∈ `todo | doing | done | failed`.
 
@@ -133,6 +133,22 @@
 - `iteration 102` · T6 Opus re-reviewer: 120KB output, last modified 00:37; active
 - `iteration 103` · T6 Opus re-reviewer: 122KB, file mid-write; agent still active
 - `iteration 104` · T6 Opus re-reviewer PASS (attempt 2); all 6 invariants green; T6 marked done; starting T7
+- `iteration 105` · T7 implementer running (ae8109ae9eae67981)
+- `iteration 106` · T7 no new files yet; agent writing
+- `iteration 107` · T7 still no src/cli.ts or src/log.ts; agent writing
+- `iteration 108` · T7 src/log.ts appeared; no cli.ts yet; agent writing
+- `iteration 109` · T7 log.ts present, still no cli.ts; agent writing
+- `iteration 110` · T7 both cli.ts + log.ts present; agent running verify
+- `iteration 111` · T7 both files present; no commit; agent fixing verify failures
+- `iteration 112` · T7 same; agent still iterating
+- `iteration 113` · T7 cli.ts + log.ts untracked; no commit; agent still running
+- `iteration 114` · T7 PASS (3b2c0d3); verify 153/153; Sonnet reviewer spawned (a9054685c9c8be05e)
+- `iteration 115` · T7 Sonnet reviewer running
+- `iteration 116` · T7 Sonnet reviewer still running
+- `iteration 117` · T7 Sonnet reviewer still running
+- `iteration 118` · T7 Sonnet reviewer still running
+- `iteration 119` · T7 Sonnet reviewer still running
+- `iteration 120` · T7 Sonnet reviewer PASS (LOW: os.homedir); T7 done; T8 starting
 
 ## Decision log (circuit-breaker)
 
