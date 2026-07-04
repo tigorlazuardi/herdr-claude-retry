@@ -511,7 +511,7 @@ describe('daemon — hard invariants', () => {
     const status = await stepState(
       state, 'p1', 'Claude is ready.', // banner gone
       new Date('2024-01-15T10:00:00Z').getTime(),
-      async () => { calls++; },
+      async (_reason: 'rate-limit' | 'api-error') => { calls++; },
     );
     assert.equal(status, 'monitoring');
     assert.equal(calls, 0, 'must NOT inject when banner gone — wait abandoned');
@@ -530,7 +530,7 @@ describe('daemon — hard invariants', () => {
       "You've hit your session limit · resets 3am (UTC)";
     const status = await stepState(
       state, 'p1', pastResetScreen, FIXED_NOW,
-      async () => { calls++; },
+      async (_reason: 'rate-limit' | 'api-error') => { calls++; },
     );
     // Should inject (reset already passed) not wait 24h
     assert.equal(status, 'retried');
@@ -551,11 +551,11 @@ describe('daemon — hard invariants', () => {
       'API Error: Connection closed mid-response. The response above may be incomplete.\n' +
       '> ';
 
-    await stepState(state, 'p1', apiScreen, now, async () => { calls++; }); // arm
+    await stepState(state, 'p1', apiScreen, now, async (_r: 'rate-limit' | 'api-error') => { calls++; }); // arm
 
     for (let i = 0; i < MAX_API_RETRIES + 2; i++) {
       now += 10_000;
-      await stepState(state, 'p1', apiScreen, now, async () => { calls++; });
+      await stepState(state, 'p1', apiScreen, now, async (_r: 'rate-limit' | 'api-error') => { calls++; });
     }
 
     assert.equal(calls, MAX_API_RETRIES, `must not exceed ${MAX_API_RETRIES} retries, got ${calls}`);
@@ -573,7 +573,7 @@ describe('daemon — hard invariants', () => {
     const status = await stepState(
       state, 'p1', bannerMidScreen,
       new Date('2024-01-15T10:00:00Z').getTime(),
-      async () => { calls++; },
+      async (_reason: 'rate-limit' | 'api-error') => { calls++; },
     );
     assert.equal(calls, 0, 'must NOT inject when banner not at bottom');
     assert.equal(status, 'monitoring');
@@ -674,5 +674,149 @@ describe('daemon — pane lifecycle', () => {
       logMsgs.some((m) => m.includes('pane-lifecycle') && m.includes('closed')),
       `expected closed log, got: ${JSON.stringify(logMsgs)}`,
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test: api-error inject fires after backoff
+// ---------------------------------------------------------------------------
+
+describe('daemon — api-error inject', () => {
+  it('api-error screen → inject fires after backoff', async () => {
+    // API_RETRY_DELAY_MS = 10_000 in monitor.ts; we fake time to jump past it
+    const BASE_NOW = new Date('2024-01-15T10:00:00Z').getTime();
+    const API_RETRY_DELAY_MS = 10_000;
+    let nowMs = BASE_NOW;
+
+    // Pane shows "API Error: connection closed" at bottom (matches isApiErrorAtBottom)
+    const apiErrorScreen =
+      'Some output above.\n' +
+      'API Error: connection closed\n' +
+      '> ';
+
+    const { opts, injectedPanes, abort } = makeDaemonOpts(
+      {
+        agents: [
+          {
+            pane_id: 'pane-apierr',
+            agent: 'claude',
+            agent_status: 'blocked',
+            agent_session: { source: 'claude', agent: 'claude', kind: 'uuid', value: 'uuid-apierr' },
+            workspace_id: 'ws1',
+            tab_id: 'tab1',
+            terminal_id: 't1',
+            focused: false,
+            cwd: '/tmp',
+            foreground_cwd: '/tmp',
+            revision: 1,
+          } as AgentEntry,
+        ],
+        paneTexts: { 'pane-apierr': apiErrorScreen },
+      },
+      {
+        now: () => nowMs,
+        sweepIntervalMs: 50, // fast sweep
+        sleep: async (ms) => {
+          // Advance fake clock on sleep so timer-based checks fire
+          nowMs += Math.max(ms, API_RETRY_DELAY_MS + 1000);
+          await new Promise<void>((r) => setTimeout(r, Math.min(ms, 10)));
+        },
+        log: () => {},
+      },
+    );
+
+    // Run long enough for: initial sweep (arms timer) + one more sweep (injects)
+    await runDaemonBriefly(opts, 200);
+    abort();
+
+    assert.ok(
+      injectedPanes.includes('pane-apierr'),
+      `expected pane-apierr to be injected after api-error backoff, got: ${JSON.stringify(injectedPanes)}`,
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Test: per-pane subscriptions built correctly
+// ---------------------------------------------------------------------------
+
+describe('daemon — per-pane subscriptions', () => {
+  it('subscribe called with per-pane output_matched and agent_status subs', async () => {
+    const FIXED_NOW = new Date('2024-01-15T10:00:00Z').getTime();
+    const capturedSubs: SubscriptionSpec[][] = [];
+
+    const agents: AgentEntry[] = [
+      {
+        pane_id: 'pane-sub-a',
+        agent: 'claude',
+        agent_status: 'idle',
+        agent_session: { source: 'claude', agent: 'claude', kind: 'uuid', value: 'uuid-a' },
+        workspace_id: 'ws1',
+        tab_id: 'tab1',
+        terminal_id: 't1',
+        focused: false,
+        cwd: '/tmp',
+        foreground_cwd: '/tmp',
+        revision: 1,
+      } as AgentEntry,
+      {
+        pane_id: 'pane-sub-b',
+        agent: 'claude',
+        agent_status: 'idle',
+        agent_session: { source: 'claude', agent: 'claude', kind: 'uuid', value: 'uuid-b' },
+        workspace_id: 'ws1',
+        tab_id: 'tab2',
+        terminal_id: 't2',
+        focused: false,
+        cwd: '/tmp',
+        foreground_cwd: '/tmp',
+        revision: 1,
+      } as AgentEntry,
+    ];
+
+    const { opts, abort } = makeDaemonOpts(
+      { agents, paneTexts: {} },
+      {
+        now: () => FIXED_NOW,
+        sweepIntervalMs: 60000,
+        sleep: async (ms) => await new Promise<void>((r) => setTimeout(r, Math.min(ms, 5))),
+        log: () => {},
+      },
+    );
+
+    // Intercept subscribe to capture subscription specs
+    const origSubscribe = opts.client.subscribe.bind(opts.client);
+    (opts.client as unknown as { subscribe: typeof opts.client.subscribe }).subscribe =
+      async function* (subs: SubscriptionSpec[], signal?: AbortSignal): AsyncGenerator<HerdrEvent> {
+        capturedSubs.push(subs);
+        yield* origSubscribe(subs, signal);
+      };
+
+    const daemonPromise = runDaemon(opts);
+    await new Promise<void>((r) => setTimeout(r, 50));
+    abort();
+    await daemonPromise.catch(() => {});
+
+    assert.ok(capturedSubs.length >= 1, 'subscribe must have been called at least once');
+    const firstSubs = capturedSubs[0];
+
+    // Should have per-pane output_matched for each agent pane
+    const outputMatchedForA = firstSubs.some(
+      (s) => s.type === 'pane.output_matched' && s.pane_id === 'pane-sub-a',
+    );
+    const outputMatchedForB = firstSubs.some(
+      (s) => s.type === 'pane.output_matched' && s.pane_id === 'pane-sub-b',
+    );
+    const agentStatusForA = firstSubs.some(
+      (s) => s.type === 'pane.agent_status_changed' && s.pane_id === 'pane-sub-a',
+    );
+    const agentStatusForB = firstSubs.some(
+      (s) => s.type === 'pane.agent_status_changed' && s.pane_id === 'pane-sub-b',
+    );
+
+    assert.ok(outputMatchedForA, 'must include pane.output_matched for pane-sub-a');
+    assert.ok(outputMatchedForB, 'must include pane.output_matched for pane-sub-b');
+    assert.ok(agentStatusForA, 'must include pane.agent_status_changed for pane-sub-a');
+    assert.ok(agentStatusForB, 'must include pane.agent_status_changed for pane-sub-b');
   });
 });

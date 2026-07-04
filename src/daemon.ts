@@ -9,7 +9,7 @@ import type { HerdrClient, AgentEntry } from './herdr.ts';
 import { discoverAccountDirs, resolveAccountDir } from './accounts.ts';
 import { readAccessToken, fetchUsage } from './usage.ts';
 import type { AccountUsage } from './usage.ts';
-import { isBlockedAtBanner, match } from './patterns.ts';
+import { isBlockedAtBanner, isApiErrorAtBottom, match } from './patterns.ts';
 import { createState, stepState, MAX_MISSES } from './monitor.ts';
 import type { MonitorState, PaneStates, Logger } from './monitor.ts';
 
@@ -173,11 +173,16 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
         paneId,
         screenText,
         now(),
-        async () => {
+        async (reason: 'rate-limit' | 'api-error') => {
           // INVARIANT: check canonical banner immediately before inject
           const preInjectRead = await client.paneRead(paneId, 'visible');
-          if (!isBlockedAtBanner(preInjectRead.text)) {
+          const text = preInjectRead.text;
+          if (reason === 'rate-limit' && !isBlockedAtBanner(text)) {
             log(`${paneId} — banner gone just before inject, skipping`);
+            return;
+          }
+          if (reason === 'api-error' && !isApiErrorAtBottom(text)) {
+            log(`${paneId} — api-error gone just before inject, skipping`);
             return;
           }
           await client.inject(paneId);
@@ -240,48 +245,80 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
   }
 
   // -------------------------------------------------------------------------
-  // Event subscription loop
+  // Event subscription loop (restart-capable, with per-pane subscriptions)
   // -------------------------------------------------------------------------
 
-  // Subscribe to all relevant event types in one call
-  async function runEventLoop(): Promise<void> {
-    const subscriptions = [
-      { type: 'pane.output_matched', match: { type: 'regex' as const, value: 'limit|rate.?limit|session limit|usage limit' } },
-      { type: 'pane.agent_status_changed' },
-      { type: 'pane.created' },
-      { type: 'pane.closed' },
+  let currentPaneIds: string[] = [];
+
+  async function buildSubscriptions(): Promise<import('./herdr.ts').SubscriptionSpec[]> {
+    let agents: AgentEntry[] = [];
+    try { agents = await client.agentList(); } catch { /* sweep will catch it */ }
+    currentPaneIds = agents.map((a) => a.pane_id);
+    const subs: import('./herdr.ts').SubscriptionSpec[] = [
+      ...currentPaneIds.map((paneId) => ({
+        type: 'pane.output_matched' as const,
+        pane_id: paneId,
+        source: 'visible' as const,
+        match: { type: 'regex' as const, value: 'limit|rate.?limit|session limit|usage limit' },
+      })),
+      ...currentPaneIds.map((paneId) => ({
+        type: 'pane.agent_status_changed' as const,
+        pane_id: paneId,
+      })),
+      { type: 'pane.created' as const },
+      { type: 'pane.closed' as const },
     ];
+    return subs;
+  }
 
-    try {
-      const events = client.subscribe(subscriptions, signal);
-      for await (const ev of events) {
-        if (signal?.aborted) break;
+  async function runEventLoopWithRestart(): Promise<void> {
+    while (!signal?.aborted) {
+      const innerAc = new AbortController();
+      const innerSignal = signal
+        ? AbortSignal.any([signal, innerAc.signal])
+        : innerAc.signal;
 
-        if (ev.event === 'pane.output_matched') {
-          const paneId = ev.data.pane_id;
-          log(`${paneId} — output_matched, triggering check`);
-          checkPane(paneId).catch((e) => log(`${paneId} checkPane error: ${e}`));
-        } else if (ev.event === 'pane.agent_status_changed') {
-          if (ev.data.agent_status === 'blocked') {
+      const subs = await buildSubscriptions();
+      log(`subscribing to events for ${currentPaneIds.length} pane(s)`);
+
+      let shouldRestart = false;
+      try {
+        const events = client.subscribe(subs, innerSignal);
+        for await (const ev of events) {
+          if (signal?.aborted) break;
+
+          if (ev.event === 'pane.output_matched') {
             const paneId = ev.data.pane_id;
-            log(`${paneId} — agent blocked, triggering check`);
+            log(`${paneId} — output_matched, triggering check`);
             checkPane(paneId).catch((e) => log(`${paneId} checkPane error: ${e}`));
+          } else if (ev.event === 'pane.agent_status_changed') {
+            if (ev.data.agent_status === 'blocked') {
+              const paneId = ev.data.pane_id;
+              log(`${paneId} — agent blocked, triggering check`);
+              checkPane(paneId).catch((e) => log(`${paneId} checkPane error: ${e}`));
+            }
+          } else if (ev.event === 'pane_created') {
+            const paneId = ev.data.pane?.pane_id;
+            log(`${paneId ?? 'unknown'} — pane created, resubscribing`);
+            shouldRestart = true;
+            innerAc.abort();
+            break;
+          } else if (ev.event === 'pane_closed') {
+            const paneId = ev.data.pane_id;
+            log(`${paneId} — pane closed, dropping state`);
+            paneStates.delete(paneId);
+            inProgress.delete(paneId);
           }
-        } else if (ev.event === 'pane_created') {
-          const paneId = ev.data.pane.pane_id;
-          log(`${paneId} — pane created`);
-          // New pane gets state on first checkPane call
-        } else if (ev.event === 'pane_closed') {
-          const paneId = ev.data.pane_id;
-          log(`${paneId} — pane closed, dropping state`);
-          paneStates.delete(paneId);
-          inProgress.delete(paneId);
+        }
+      } catch (err) {
+        if (!signal?.aborted && !innerAc.signal.aborted) {
+          log(`event loop error: ${err}`);
         }
       }
-    } catch (err) {
-      if (!signal?.aborted) {
-        log(`event loop error: ${err}`);
-      }
+
+      if (!shouldRestart || signal?.aborted) break;
+      // Brief pause before resubscribing to avoid tight loop on repeated pane.created
+      await sleep(500);
     }
   }
 
@@ -311,7 +348,7 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
 
   // Run both loops concurrently — they share paneStates and checkPane
   await Promise.race([
-    runEventLoop(),
+    runEventLoopWithRestart(),
     runSweepLoop(),
   ]);
 }

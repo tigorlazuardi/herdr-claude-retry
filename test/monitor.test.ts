@@ -13,18 +13,18 @@ const FIXED_NOW = new Date('2024-01-15T10:00:00Z').getTime();
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeInjectFn(): { inject: () => Promise<void>; calls: number } {
+function makeInjectFn(): { inject: (_reason: 'rate-limit' | 'api-error') => Promise<void>; calls: number } {
   const state = { calls: 0 };
   return {
-    inject: async () => { state.calls++; },
+    inject: async (_reason: 'rate-limit' | 'api-error') => { state.calls++; },
     calls: state.calls,
   };
 }
 
-type InjectTracker = { calls: number; inject: () => Promise<void> };
+type InjectTracker = { calls: number; inject: (_reason: 'rate-limit' | 'api-error') => Promise<void> };
 
 function tracker(): InjectTracker {
-  const t = { calls: 0, inject: async () => { t.calls++; } };
+  const t = { calls: 0, inject: async (_reason: 'rate-limit' | 'api-error') => { t.calls++; } };
   return t;
 }
 

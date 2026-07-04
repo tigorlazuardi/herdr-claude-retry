@@ -73,7 +73,7 @@ export async function stepState(
   paneId: string,
   screenText: string,
   now: number,
-  injectContinue: () => Promise<void>,
+  injectContinue: (reason: 'rate-limit' | 'api-error') => Promise<void>,
   opts?: {
     marginSeconds?: number;
     fallbackHours?: number;
@@ -113,7 +113,7 @@ export async function stepState(
         log(`${label} wait abandoned (no canonical banner at bottom)`);
         return 'monitoring';
       }
-      await injectContinue();
+      await injectContinue('rate-limit');
       state.status = 'monitoring';
       state.waitUntil = 0;
       log(`${label} — reset reached, sent 'continue'`);
@@ -132,7 +132,7 @@ export async function stepState(
       if (!usage.limited) {
         // Account not limited — stale or incidental banner
         if (isBlockedAtBanner(screenText)) {
-          await injectContinue();
+          await injectContinue('rate-limit');
           log(`${label} cleared-limit banner at bottom — sent 'continue'`);
           return 'retried';
         }
@@ -156,7 +156,7 @@ export async function stepState(
     if (waitMs <= 0) {
       // Reset time already passed — no roll-to-tomorrow.
       if (isBlockedAtBanner(screenText)) {
-        await injectContinue();
+        await injectContinue('rate-limit');
         log(`${label} reset already passed — sent 'continue'`);
         return 'retried';
       }
@@ -187,7 +187,7 @@ export async function stepState(
       return 'monitoring';
     }
     if (now >= state.apiNextActionAt) {
-      await injectContinue();
+      await injectContinue('api-error');
       state.apiRetries++;
       state.apiNextActionAt = now + API_RETRY_DELAY_MS;
       return 'api-retried';
