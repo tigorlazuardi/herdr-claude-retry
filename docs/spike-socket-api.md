@@ -39,9 +39,9 @@ Fixture: `agent-list.json` (sent via `socat - UNIX-CONNECT:$HERDR_SOCKET_PATH`).
 {"id": "", "error": {"code": "invalid_request", "message": "..."}}
 ```
 
-**Event stream:** after `events.subscribe`, events arrive as additional NDJSON lines on the same connection, also with `id: ""`:
+**Event stream:** after `events.subscribe`, events arrive as additional NDJSON lines on the same connection. **Event envelope is different from responses** — uses `event` + `data` keys, no `id` or `result` wrapper:
 ```json
-{"id": "", "result": {"type": "pane_agent_status_changed", ...}}
+{"data": {"agent": "claude", "agent_status": "working", "pane_id": "wH:p1", "workspace_id": "wH"}, "event": "pane.agent_status_changed"}
 ```
 
 Connection is long-lived for subscriptions. For one-shot requests, the connection can be closed after the response.
@@ -91,13 +91,30 @@ Required fields: `pane_id`, `source` (`visible`/`recent`/`recent_unwrapped`/`det
 `pane.created`/`pane.closed` do **not** require `pane_id` (subscribe globally).
 `pane.agent_status_changed` requires `pane_id`.
 
-**Expected event payload shape** (not captured live; inferred from type name + agent_list fields):
+**`pane.agent_status_changed` live event payload** (captured):
 ```json
-{"id": "", "result": {"type": "pane_agent_status_changed", "pane_id": "wE:p2", "agent_status": "blocked", ...}}
+{"data": {"agent": "claude", "agent_status": "working", "pane_id": "wH:p1", "workspace_id": "wH"}, "event": "pane.agent_status_changed"}
 ```
-**GAP:** Live `pane.agent_status_changed` and `pane.output_matched` event payloads not captured (no status change occurred during spike window). Implication: client must be tolerant of unknown fields. Workaround: subscribe and log first real event; unit tests use fixtures replaying the shape above.
+Fields in `data`: `agent`, `agent_status` (`"idle"` | `"working"` | `"blocked"` | `"done"` | `"unknown"`), `pane_id`, `workspace_id`.
+`"blocked"` = Claude is stuck/waiting. Treat as trigger to run `pane.read` + `isBlockedAtBanner` — does NOT mean rate-limited alone.
 
-Fixture: `events-subscribe-subscription-started.json`.
+**`pane.output_matched` live event payload** (captured):
+```json
+{
+  "data": {
+    "matched_line": "homeserver@homeserver ~/p/herdr-claude-retry> echo testGHI",
+    "pane_id": "wH:p1",
+    "read": {
+      "format": "text", "pane_id": "wH:p1", "revision": 0, "source": "recent_unwrapped",
+      "tab_id": "wH:t1", "text": "<full pane content>", "truncated": false, "workspace_id": "wH"
+    }
+  },
+  "event": "pane.output_matched"
+}
+```
+`data.matched_line` = the specific line that matched the regex. `data.read` = full pane content snapshot at match time (saves an extra `pane.read` call). The `read.source` matches the `source` field in the subscription.
+
+Fixture: `events-subscribe-subscription-started.json`, `event.pane.agent_status_changed.json`, `event.pane.output_matched.json`.
 
 ## 4. `pane.read` — sources, ANSI handling, line limits
 
@@ -173,11 +190,11 @@ Fixture: `pane-process-info.json`.
 
 **`pane.send_keys` — for special keys:**
 ```json
-{"id": "k1", "method": "pane.send_keys", "params": {"pane_id": "wK:p1", "keys": ["ctrl+c"]}}
+{"id": "k1", "method": "pane.send_keys", "params": {"pane_id": "wK:p1", "keys": ["C-c"]}}
 ```
 Response: `{"id": "k1", "result": {"type": "ok"}}`
 
-Key encoding: string array of key names. `ctrl+c` confirmed working. Other modifiers follow same pattern (`ctrl+<key>`).
+Key encoding: **Emacs notation**, NOT `ctrl+c`. Confirmed from captured fixture: `"C-c"` for Ctrl+C. Other modifiers: `"C-<key>"` pattern (e.g., `"C-d"` for Ctrl+D).
 
 **`pane.send_text` — for literal text (including `\n` for Enter):**
 ```json
@@ -188,7 +205,7 @@ Sending `text\n` is atomic (the text plus Enter arrives as one unit). Verified: 
 **`pane.run` does NOT exist as a socket method.** The CLI `herdr pane run <pane_id> <cmd>` is implemented client-side as `pane.send_text` with `\n`. Use `pane.send_text` with a trailing `\n` for the same effect.
 
 **Inject sequence for daemon:**
-1. `pane.send_keys` with `["ctrl+c"]` — clears partial input
+1. `pane.send_keys` with `["C-c"]` — clears partial input (Emacs notation)
 2. `pane.send_text` with `"continue\n"` — submits continue
 
 **GAP:** `agent.send` also sends text (confirmed `{"type":"ok"}` response) but it's unclear if it appends Enter automatically. From CLI docs: "agent send writes literal text; use pane run when you want command text plus Enter." So `agent.send` = literal text (no Enter); `pane.send_text` with `\n` = text + Enter. Use `pane.send_text` for injection.
@@ -244,14 +261,22 @@ const socketPath = process.env.HERDR_SOCKET_PATH;  // "/home/homeserver/.config/
 
 The daemon MUST exclude its own pane from monitoring (never watch `HERDR_PANE_ID`).
 
-**Fallback (if running outside herdr, e.g. nohup):** `HERDR_ENV` is unset; use the config-dir default socket path `~/.config/herdr/herdr.sock`. No `HERDR_PANE_ID` available — daemon has no pane to exclude.
+**Socket-based fallback (if `HERDR_PANE_ID` env var absent):** call `pane.current` with no params — returns the currently focused pane:
+```json
+{"id": "1", "method": "pane.current", "params": {}}
+→ {"id": "1", "result": {"type": "pane_current", "pane": {"pane_id": "wE:p2", "workspace_id": "wE", ...}}}
+```
+Use this pane_id as self-identity if `HERDR_PANE_ID` unset (daemon launched from focused pane via CLI).
+
+**Fallback (if running outside herdr, e.g. nohup):** `HERDR_ENV` is unset; use the config-dir default socket path `~/.config/herdr/herdr.sock`. No `HERDR_PANE_ID` or `pane.current` available — daemon has no pane to exclude.
+
+Fixture: `herdr.env_vars.txt`, `pane.current.json`.
 
 ## Open gaps and workarounds
 
 | Gap | Implication | Workaround |
 |---|---|---|
-| Live `pane.agent_status_changed` payload not captured | Exact field names for `agent_status` value in event unknown | Assume same as `agent_status` in `agent.list`; make client tolerant of unknown fields |
-| Live `pane.output_matched` event payload not captured | Matched text / line number fields unknown | Subscribe with broad pattern first iteration; log and assert shape in unit tests against replayed fixture |
 | `pane.output_matched` per-pane only | Must register one subscription per Claude pane; no wildcard | On `pane.created` event, add subscription for new pane; on `pane.closed`, remove |
-| `pane.agent_status_changed` `blocked` status meaning | Unknown if `blocked` = rate-limited or any block | Treat `blocked` as a trigger to run `pane.read` + `isBlockedAtBanner` check; don't assume rate-limit |
-| `events.subscribe` reconnect behavior | Unclear if server re-sends missed events on reconnect | Reconcile sweep on every (re)connect is the designed mitigation |
+| `pane.agent_status_changed` `blocked` vs rate-limit | `blocked` = any block, not necessarily rate-limited | Always run `pane.read` + `isBlockedAtBanner` after `blocked` event; never assume rate-limit |
+| `events.subscribe` reconnect behavior | Server does NOT re-send missed events on reconnect | Reconcile sweep on every (re)connect catches missed events |
+| `pane.output_matched` regex syntax limits | Only `match.type: "regex"` observed; no `"literal"` or `"glob"` tested | Use regex; escape special chars when matching literal banner text |
