@@ -8,7 +8,7 @@
 - **install-cmd:** `npm install`
 - **parallel-cap:** `4`
 - **last-updated:** `2026-07-04T00:00:00Z` (iteration `1`)
-- **last-progress-iteration:** `6` (no-progress guard: +3 → circuit-breaker)
+- **last-progress-iteration:** `21` (no-progress guard: +3 → circuit-breaker)
 
 ## Task ledger
 
@@ -16,10 +16,10 @@
 |---------|-------|------|----------|----------|--------|----------|-------|
 | T0 spike-socket-api | B1 | M | sonnet | ../herdr-claude-retry-001-T0 | done | 1 | gates T4/T5/T6 prompts |
 | T1 scaffold | B1 | S | sonnet | ../herdr-claude-retry-001-T1 | done | 0 | establishes verify baseline |
-| T2 pure-modules | B2 | S | sonnet | ../herdr-claude-retry-001-T2 | todo | 0 | verbatim port |
-| T3 usage-api | B2 | S | sonnet | ../herdr-claude-retry-001-T3 | todo | 0 | token never logged |
-| T4 socket-client | B2 | M | sonnet | ../herdr-claude-retry-001-T4 | todo | 0 | needs T0 findings |
-| T5 account-resolution | B2 | M | sonnet | ../herdr-claude-retry-001-T5 | todo | 0 | UUID→jsonl primary |
+| T2 pure-modules | B2 | S | sonnet | ../herdr-claude-retry-001-T2 | done | 0 | verbatim port |
+| T3 usage-api | B2 | S | sonnet | ../herdr-claude-retry-001-T3 | done | 0 | token never logged |
+| T4 socket-client | B2 | M | sonnet | ../herdr-claude-retry-001-T4 | doing | 0 | needs T0 findings |
+| T5 account-resolution | B2 | M | sonnet | ../herdr-claude-retry-001-T5 | doing | 0 | UUID→jsonl primary |
 | T6 core-daemon-logic | B3 | L | opus | — | todo | 0 | hard invariants in PROMPT |
 | T7 cli-logging | B4 | M | sonnet | — | todo | 0 | telemetry table in SPEC.mdx |
 | T8 acceptance-packaging | B5 | M | sonnet | — | todo | 0 | e2e vs live herdr; no npm publish |
@@ -46,6 +46,10 @@
 - `iteration 15` · T0 reviewer REJECT (3 critical: key encoding "C-c" not "ctrl+c", event envelope wrong, false gap claims); doc fixed + recommitted (b80e035); re-reviewer spawned; T2 agent running (a55875da472de69a5)
 - `iteration 16` · T2 src files written (patterns/time-parser/format, untracked); T0 re-reviewer running; T3 worktree created but no agent yet
 - `iteration 17` · T0 re-reviewer PASS; T0 merged (46c6cc5); T0 worktree removed; T3 implementer spawned; T2 still running (4 files untracked)
+- `iteration 18` · T2 + T3 no commits yet; both agents running
+- `iteration 19` · T2 all 6 files written (untracked); T3 usage.ts written; both pre-commit
+- `iteration 20` · T2 PASS (66 tests, 5b2f53b); T2 reviewer spawned; T3 still no commit
+- `iteration 21` · T2 reviewer PASS; T3 reviewer PASS; T2+T3 merged (f458b01, d76a025); T4+T5 worktrees created; T4+T5 implementers spawned in parallel; last-progress-iteration=21
 
 ## Decision log (circuit-breaker)
 
