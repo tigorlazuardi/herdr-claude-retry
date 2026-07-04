@@ -1,0 +1,33 @@
+name: Publish to npm
+
+# Publishes to npm when a v* tag is pushed (e.g. v0.1.0).
+#
+# Auth: npm Trusted Publishing (OIDC) — no NPM_TOKEN secret needed.
+# Configure the trusted publisher once on npmjs.com:
+#   package Settings -> Trusted Publisher -> GitHub Actions
+#   pointing at this repo + workflow file (publish.yml).
+# Provenance is attached automatically via --provenance.
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # required for OIDC trusted publishing + provenance
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20.x'
+          registry-url: https://registry.npmjs.org
+          cache: npm
+      # Trusted publishing needs npm >= 9.5.0. Pin deliberately (this step runs
+      # with id-token: write, so an unpinned 'latest' is a supply-chain risk).
+      - run: npm install -g npm@10.9.2
+      - run: npm ci
+      # prepublishOnly runs typecheck + test + build before packing.
+      - run: npm publish --provenance

@@ -19,6 +19,17 @@ import type { MonitorState, PaneStates, Logger } from './monitor.ts';
 
 export interface DaemonOpts {
   client: HerdrClient;
+  /**
+   * Separate client used exclusively for event subscriptions.
+   *
+   * herdr closes any connection that sends non-subscribe requests after
+   * `events.subscribe` — so requests (pane.read, agent.list, inject) and the
+   * subscription stream must use different sockets. When provided, `client` is
+   * used only for regular requests and `subscribeClient` is used only for
+   * `events.subscribe`. Both must already be connected. Defaults to `client`
+   * when omitted (fine for unit tests with a mock that handles both).
+   */
+  subscribeClient?: HerdrClient;
   /** Override account dir discovery. */
   accountDirs?: string[];
   /** Extra seconds after resetsAt before injecting. Default 60. */
@@ -107,6 +118,7 @@ async function resolveUsage(
 export async function runDaemon(opts: DaemonOpts): Promise<void> {
   const {
     client,
+    subscribeClient = client,
     marginSeconds = 60,
     sweepIntervalMs = 5 * 60 * 1000,
     signal,
@@ -283,7 +295,7 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
 
       let shouldRestart = false;
       try {
-        const events = client.subscribe(subs, innerSignal);
+        const events = subscribeClient.subscribe(subs, innerSignal);
         for await (const ev of events) {
           if (signal?.aborted) break;
 
