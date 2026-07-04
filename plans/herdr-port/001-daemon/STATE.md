@@ -8,7 +8,7 @@
 - **install-cmd:** `npm install`
 - **parallel-cap:** `4`
 - **last-updated:** `2026-07-04T00:00:00Z` (iteration `1`)
-- **last-progress-iteration:** `21` (no-progress guard: +3 → circuit-breaker)
+- **last-progress-iteration:** `34` (no-progress guard: +3 → circuit-breaker)
 
 ## Task ledger
 
@@ -18,9 +18,9 @@
 | T1 scaffold | B1 | S | sonnet | ../herdr-claude-retry-001-T1 | done | 0 | establishes verify baseline |
 | T2 pure-modules | B2 | S | sonnet | ../herdr-claude-retry-001-T2 | done | 0 | verbatim port |
 | T3 usage-api | B2 | S | sonnet | ../herdr-claude-retry-001-T3 | done | 0 | token never logged |
-| T4 socket-client | B2 | M | sonnet | ../herdr-claude-retry-001-T4 | doing | 0 | needs T0 findings |
-| T5 account-resolution | B2 | M | sonnet | ../herdr-claude-retry-001-T5 | doing | 0 | UUID→jsonl primary |
-| T6 core-daemon-logic | B3 | L | opus | — | todo | 0 | hard invariants in PROMPT |
+| T4 socket-client | B2 | M | sonnet | ../herdr-claude-retry-001-T4 | done | 0 | needs T0 findings |
+| T5 account-resolution | B2 | M | sonnet | ../herdr-claude-retry-001-T5 | done | 0 | UUID→jsonl primary |
+| T6 core-daemon-logic | B3 | L | opus | — | doing | 0 | hard invariants in PROMPT |
 | T7 cli-logging | B4 | M | sonnet | — | todo | 0 | telemetry table in SPEC.mdx |
 | T8 acceptance-packaging | B5 | M | sonnet | — | todo | 0 | e2e vs live herdr; no npm publish |
 
@@ -50,6 +50,20 @@
 - `iteration 19` · T2 all 6 files written (untracked); T3 usage.ts written; both pre-commit
 - `iteration 20` · T2 PASS (66 tests, 5b2f53b); T2 reviewer spawned; T3 still no commit
 - `iteration 21` · T2 reviewer PASS; T3 reviewer PASS; T2+T3 merged (f458b01, d76a025); T4+T5 worktrees created; T4+T5 implementers spawned in parallel; last-progress-iteration=21
+- `iteration 22` · T4+T5 no commits yet (only package-lock.json untracked); agents running
+- `iteration 23` · T4+T5 still no commits; agents running
+- `iteration 24` · T5 accounts.ts written (untracked); T4 still empty; agents running
+- `iteration 25` · T4 herdr.ts written (untracked); T5 accounts.ts written; both agents still writing tests
+- `iteration 26` · T4 herdr.ts + T5 accounts.ts still untracked; stale T0 fresh-agent completed (ignored, T0 already merged)
+- `iteration 27` · T5 has accounts.ts + accounts.test.ts (untracked); T4 still only herdr.ts; both running
+- `iteration 28` · same state; T4+T5 agents running verify/fixing
+- `iteration 29` · T4 still only herdr.ts (no test yet); T5 still untracked; agents running
+- `iteration 30` · T5 PASS (80 tests, 42a8683); T5 reviewer spawned; T4 now has herdr.ts+herdr.test.ts (untracked); last-progress-iteration=30
+- `iteration 31` · T5 reviewer PASS; T5 merged (cf4f241); integration green (80 tests); T4 still untracked files, agent running
+- `iteration 32` · T4 still untracked (herdr.ts + herdr.test.ts); agent likely iterating on verify failures
+- `iteration 33` · T4 files exist (herdr.ts + herdr.test.ts); running verify to diagnose
+- `iteration 34` · T4 PASS (78 tests, 14e6e21); verify green (reconnect test ~1s); T4 reviewer spawned; last-progress-iteration=34
+- `iteration 35` · T4 reviewer PASS; T4 merged (81dd6c9); integration green (78 tests); B2 complete; T6 implementer spawning
 
 ## Decision log (circuit-breaker)
 
