@@ -14,7 +14,7 @@
 
 | task-id | batch | tier | reviewer | worktree | status | attempts | notes |
 |---------|-------|------|----------|----------|--------|----------|-------|
-| T0 spike-socket-api | B1 | M | sonnet | ../herdr-claude-retry-001-T0 | doing | 0 | gates T4/T5/T6 prompts |
+| T0 spike-socket-api | B1 | M | sonnet | ../herdr-claude-retry-001-T0 | done | 1 | gates T4/T5/T6 prompts |
 | T1 scaffold | B1 | S | sonnet | ../herdr-claude-retry-001-T1 | done | 0 | establishes verify baseline |
 | T2 pure-modules | B2 | S | sonnet | ../herdr-claude-retry-001-T2 | todo | 0 | verbatim port |
 | T3 usage-api | B2 | S | sonnet | ../herdr-claude-retry-001-T3 | todo | 0 | token never logged |
@@ -35,6 +35,17 @@
 - `iteration 4` · T0+T1 still running; no commits yet
 - `iteration 5` · T1 PASS (npm run verify green, d243635); T1 reviewer spawned; T0 still running (worktree empty)
 - `iteration 6` · T1 reviewer PASS; T1 merged into ralph/001-daemon (1a63c1a); integration verify green; T0 still running (worktree empty, agent still active)
+- `iteration 7` · T0 still no commits; agent still active
+- `iteration 8` · T0 worktree still empty (no files written); agent still active — spike work likely taking long (socket exploration)
+- `iteration 9` · T0 still empty; agent still active; awaiting completion notification
+- `iteration 10` · T0 worktree still empty after many iterations; agent active but slow; watching for completion notification
+- `iteration 11` · T0 original agent presumed stuck (8+ iterations, empty worktree); spawned fresh T0 implementer (a2f9a6809f01a36b9)
+- `iteration 12` · T0 fresh agent still no output yet; waiting
+- `iteration 13` · T0 spike done by orchestrator directly (agents stuck); docs + fixtures committed (c7a1a7d); hcr-test-t0 workspace cleaned; T0 reviewer spawned
+- `iteration 14` · T0 reviewer still running; awaiting notification
+- `iteration 15` · T0 reviewer REJECT (3 critical: key encoding "C-c" not "ctrl+c", event envelope wrong, false gap claims); doc fixed + recommitted (b80e035); re-reviewer spawned; T2 agent running (a55875da472de69a5)
+- `iteration 16` · T2 src files written (patterns/time-parser/format, untracked); T0 re-reviewer running; T3 worktree created but no agent yet
+- `iteration 17` · T0 re-reviewer PASS; T0 merged (46c6cc5); T0 worktree removed; T3 implementer spawned; T2 still running (4 files untracked)
 
 ## Decision log (circuit-breaker)
 
