@@ -1,6 +1,6 @@
 # Ralph State — herdr-port/001-daemon
 
-- **status:** `in-progress`
+- **status:** `done`
 - **orchestrator_model:** `sonnet`
 - **base-branch:** `main`
 - **integration-branch:** `ralph/001-daemon`
@@ -22,7 +22,7 @@
 | T5 account-resolution | B2 | M | sonnet | ../herdr-claude-retry-001-T5 | done | 0 | UUID→jsonl primary |
 | T6 core-daemon-logic | B3 | L | opus | — | done | 2 | PASS after 1 REJECT (inject-reason gate + per-pane subs) |
 | T7 cli-logging | B4 | M | sonnet | — | done | 0 | LOW: os.homedir() preferred over HOME env (non-blocking) |
-| T8 acceptance-packaging | B5 | M | sonnet | — | doing | 0 | e2e vs live herdr; no npm publish |
+| T8 acceptance-packaging | B5 | M | sonnet | — | done | 0 | PASS; INFO: verify fires via prepublishOnly hook (acceptable) |
 
 `status` ∈ `todo | doing | done | failed`.
 
@@ -149,6 +149,42 @@
 - `iteration 118` · T7 Sonnet reviewer still running
 - `iteration 119` · T7 Sonnet reviewer still running
 - `iteration 120` · T7 Sonnet reviewer PASS (LOW: os.homedir); T7 done; T8 starting
+- `iteration 121` · T8 implementer running (a66f60dc18fb67f04)
+- `iteration 122` · T8 no files yet; agent writing
+- `iteration 123` · T8 still no files; agent still writing
+- `iteration 124` · T8 no files; agent still writing
+- `iteration 125` · T8 still no files; agent writing
+- `iteration 126` · T8 no files; agent still writing
+- `iteration 127` · T8 no files; agent writing (5th iteration waiting)
+- `iteration 128` · T8 no e2e/README/workflow yet; agent still writing
+- `iteration 129` · T8 agent 173KB output, file mid-write; active
+- `iteration 130` · T8 test/e2e/ + package.json modified; agent running e2e test
+- `iteration 131` · T8 same state; agent still running e2e or fixing
+- `iteration 132` · T8 e2e test written (blocked-pane.e2e.ts); no commit; agent running e2e
+- `iteration 133` · T8 README.md + e2e/ present; no workflow yet; no commit; agent running
+- `iteration 134` · T8 all 3 deliverables present (.github/, README, e2e/); agent running final verify+e2e
+- `iteration 135` · T8 same; no commit yet; agent still verifying
+- `iteration 136` · T8 same; agent still running e2e or fixing
+- `iteration 137` · T8 agent 244KB output (mid-write); active
+- `iteration 138` · T8 no commit; agent still running
+- `iteration 139` · T8 same; agent still running
+- `iteration 140` · T8 agent 262KB (growing); file mod 00:46; no commit; active
+- `iteration 141` · T8 still no commit; agent iterating
+- `iteration 142` · T8 daemon.ts modified; agent fixing e2e issue; no commit
+- `iteration 143` · T8 daemon.ts still modified; agent iterating on e2e fix
+- `iteration 144` · T8 same; agent still fixing e2e
+- `iteration 145` · T8 agent 319KB (growing); daemon.ts modified; no commit
+- `iteration 146` · T8 same; agent still iterating on e2e
+- `iteration 147` · T8 daemon.ts modified; .github/README/e2e untracked; no commit
+- `iteration 148` · T8 agent 359KB; daemon.ts still modified; no commit
+- `iteration 149` · T8 same; agent still iterating
+- `iteration 150` · T8 PASS (f2621c6); verify 153/153 + e2e 1/1; discovery: herdr event-only mode after subscribe → subscribeClient; reviewer spawning
+- `iteration 151` · T8 Sonnet reviewer running (a084302eb74b77bd5)
+- `iteration 152` · T8 Sonnet reviewer still running
+- `iteration 153` · T8 Sonnet reviewer still running
+- `iteration 154` · T8 Sonnet reviewer still running
+- `iteration 155` · T8 Sonnet reviewer: 118KB output, mid-write; active
+- `iteration 156` · T8 Sonnet reviewer PASS (INFO: prepublishOnly satisfies verify-before-publish); all tasks done; final verify 153/153; STATE.md closed; slice complete
 
 ## Decision log (circuit-breaker)
 
@@ -156,11 +192,28 @@
 
 ## Merge-handoff summary (filled at the end)
 
-- **Outcome:** —
-- **Cost tally:** —
-- **What changed:** —
-- **How verified:** —
-- **Follow-ups / known gaps:** —
+- **Outcome:** COMPLETE — all 9 tasks (T0–T8) done; slice ready to merge
+- **Cost tally:** 156 Ralph loop iterations; ~1 Opus reviewer (T6 ×2 = 2 Opus calls); ~6 Sonnet reviewers; 1 Opus re-reviewer; many Sonnet implementers
+- **What changed:**
+  - `src/herdr.ts` — HerdrClient: NDJSON socket client, request/response id correlation, async iterator subscribe, exponential backoff reconnect, onReconnect hook
+  - `src/monitor.ts` — MonitorState machine: createState/stepState, MAX_MISSES=3, MAX_API_RETRIES=5, injectContinue(reason) parameterized by 'rate-limit'|'api-error'
+  - `src/daemon.ts` — runDaemon(): event-driven loop, dual-client architecture (subscribeClient for subscribe, client for RPC), buildSubscriptions() per-pane, runEventLoopWithRestart on pane.created, sweep fallback, inject gates by reason
+  - `src/usage.ts` — fetchUsage(): OAuth token→Anthropic API usage; token Tier A (never logged)
+  - `src/accounts.ts` — resolveAccount(): UUID→jsonl→account resolution; /proc environ fallback
+  - `src/patterns/` — time-parser, format, limitBanners, apiErrorBanners ported verbatim from claude-retry
+  - `src/log.ts` — makeLogger(): JSON-lines stderr, level filter, ISO timestamps
+  - `src/cli.ts` — parseArgs CLI: start subcommand, --socket-path/--margin-seconds/--sweep-interval/--log-level/--debug-screens/--help; signal handling via AbortController
+  - `test/` — 153 unit tests across all modules
+  - `test/e2e/blocked-pane.e2e.ts` — live herdr e2e: creates hcr-test-t8 workspace, injects canonical rate-limit banner, runs daemon with dual clients, asserts detection via logs, cleans up
+  - `README.md` — install, usage, how-it-works, requirements, development
+  - `.github/workflows/publish.yml` — OIDC trusted publishing on v* tag push; npm provenance
+  - `docs/spike-socket-api.md` — comprehensive herdr socket API reference (verified against live herdr 0.7.1)
+  - `test/fixtures/socket/` — 22 captured socket API fixtures
+- **How verified:** `npm run verify` (typecheck + 153/153 unit tests + build) green on final commit; `npm run e2e` 1/1 pass against live herdr; Opus reviewed T6 (2 rounds); Sonnet reviewed T0, T1, T2, T3, T4, T5, T7, T8
+- **Follow-ups / known gaps:**
+  - LOW: `src/cli.ts` uses `HOME` env for socket path fallback; `os.homedir()` preferred (non-blocking, noted by T7 reviewer)
+  - INFO: `.github/workflows/publish.yml` lacks explicit `npm run verify` step — verify fires via `prepublishOnly` hook (functionally equivalent; noted by T8 reviewer)
+  - e2e test uses soft-skip (`return`) not `node:test` skip — test runner sees pass, not skip; acceptable for e2e
 - **To merge (human runs this):**
   ```
   git checkout main
