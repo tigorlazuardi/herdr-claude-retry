@@ -28,9 +28,11 @@ jobs:
           node-version: '24.x'
           registry-url: https://registry.npmjs.org
           cache: npm
-      # Trusted publishing needs npm >= 9.5.0. Pin deliberately (this step runs
-      # with id-token: write, so an unpinned 'latest' is a supply-chain risk).
-      - run: npm install -g npm@10.9.2
+      # Trusted publishing (OIDC credential exchange) needs npm >= 11.5.1 —
+      # older npm signs provenance but PUTs unauthenticated and gets a 404.
+      # Pin deliberately (this step runs with id-token: write, so an
+      # unpinned 'latest' is a supply-chain risk).
+      - run: npm install -g npm@11.5.1
       - run: npm ci
       # prepublishOnly runs typecheck + test + build before packing.
       - run: npm publish --provenance
