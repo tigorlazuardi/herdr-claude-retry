@@ -117,7 +117,9 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
     signal,
     log = (msg: string) => process.stderr.write(`[herdr] ${msg}\n`),
     now = () => Date.now(),
-    sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms)),
+    // unref: a pending sweep timer must not keep the process alive after the
+    // event loop side of the Promise.race resolves on shutdown.
+    sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms).unref()),
     fetchUsageFn = fetchUsage,
     readTokenFn = readAccessToken,
     discoverDirsFn = discoverAccountDirs,
