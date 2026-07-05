@@ -152,6 +152,56 @@ test('fetchUsage: returns null on 500', async () => {
   assert.equal(result, null);
 });
 
+test('fetchUsage: onError receives status code on non-200', async () => {
+  let capturedStatus: number | undefined;
+  let capturedReason: string | undefined;
+  await fetchUsage('tok', makeFetch(401, {}), LIMIT_THRESHOLD, (status, reason) => {
+    capturedStatus = status;
+    capturedReason = reason;
+  });
+  assert.equal(capturedStatus, 401);
+  assert.ok(capturedReason !== undefined && capturedReason.length > 0);
+});
+
+test('fetchUsage: onError receives 403 status code', async () => {
+  let capturedStatus: number | undefined;
+  await fetchUsage('tok', makeFetch(403, {}), LIMIT_THRESHOLD, (status) => {
+    capturedStatus = status;
+  });
+  assert.equal(capturedStatus, 403);
+});
+
+test('fetchUsage: token never appears in onError callback args', async () => {
+  const token = 'supersecret_token_value';
+  let errorOutput = '';
+  await fetchUsage(token, makeFetch(401, {}), LIMIT_THRESHOLD, (status, reason) => {
+    errorOutput = `${status} ${reason}`;
+  });
+  assert.ok(!errorOutput.includes(token), `token must not appear in error output: "${errorOutput}"`);
+});
+
+test('fetchUsage: onError not called on network error (caught by catch block)', async () => {
+  let onErrorCalled = false;
+  const fetchFn = async (_url: string, _init: { headers: Record<string, string> }) => {
+    throw new Error('network failure');
+  };
+  const result = await fetchUsage('tok', fetchFn, LIMIT_THRESHOLD, () => { onErrorCalled = true; });
+  assert.equal(result, null);
+  assert.equal(onErrorCalled, false);
+});
+
+test('fetchUsage: onError not called on 200 success', async () => {
+  let onErrorCalled = false;
+  const body = {
+    five_hour: { utilization: 5, resets_at: RESET_A },
+    seven_day: { utilization: 5, resets_at: RESET_B },
+    seven_day_opus: null,
+    seven_day_sonnet: null,
+  };
+  await fetchUsage('tok', makeFetch(200, body), LIMIT_THRESHOLD, () => { onErrorCalled = true; });
+  assert.equal(onErrorCalled, false);
+});
+
 test('fetchUsage: returns null on network error', async () => {
   const fetchFn = async (_url: string, _init: { headers: Record<string, string> }) => {
     throw new Error('network failure');

@@ -69,6 +69,7 @@ export async function fetchUsage(
   token: string,
   fetchFn: FetchFn = defaultFetchFn,
   threshold: number = LIMIT_THRESHOLD,
+  onError?: (status: number, reason: string) => void,
 ): Promise<AccountUsage | null> {
   try {
     const res = await fetchFn(USAGE_URL, {
@@ -78,7 +79,10 @@ export async function fetchUsage(
         'anthropic-version': '2023-06-01',
       },
     });
-    if (res.status !== 200) return null;
+    if (res.status !== 200) {
+      onError?.(res.status, `HTTP ${res.status}`);
+      return null;
+    }
 
     const body = await res.json();
     if (body === null || typeof body !== 'object') return null;

@@ -126,12 +126,16 @@ async function main(): Promise<void> {
   process.on('SIGINT', () => ac.abort());
   process.on('SIGTERM', () => ac.abort());
 
-  // Construct client
+  // Construct clients (separate sockets: one for RPC, one for event subscription)
   const client = new HerdrClient({ socketPath });
+  const subscribeClient = new HerdrClient({ socketPath });
 
   // Wire reconnect log events
   client.onReconnect = () => {
     logFn({ event: 'socket.connected' });
+  };
+  subscribeClient.onReconnect = () => {
+    logFn({ event: 'socket.connected', role: 'subscribe' });
   };
 
   // Connect
@@ -146,10 +150,21 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  try {
+    await subscribeClient.connect();
+    logFn({ event: 'socket.connected', role: 'subscribe' });
+  } catch (err) {
+    logFn({ level: 'error', event: 'socket.dead', role: 'subscribe' });
+    client.destroy();
+    process.stderr.write(`fatal: could not connect subscribe socket to ${socketPath}: ${err}\n`);
+    process.exit(1);
+  }
+
   // Run daemon — map daemon's string logger to structured events
   try {
     await runDaemon({
       client,
+      subscribeClient,
       marginSeconds,
       sweepIntervalMs: sweepIntervalSeconds * 1000,
       signal: ac.signal,
@@ -157,6 +172,7 @@ async function main(): Promise<void> {
     });
   } finally {
     client.destroy();
+    subscribeClient.destroy();
     logFn({ event: 'daemon.stop', reason: ac.signal.aborted ? 'signal' : 'exit' });
   }
 }

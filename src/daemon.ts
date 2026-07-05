@@ -107,7 +107,12 @@ async function resolveUsage(
   }
 
   // INVARIANT: never log the token
-  const usage = await opts.fetchUsageFn(tokenInfo.token).catch(() => null);
+  const usage = await opts.fetchUsageFn(
+    tokenInfo.token,
+    undefined,
+    undefined,
+    (status, reason) => opts.log(`usage fetch failed: ${reason} (status ${status})`),
+  ).catch(() => null);
   return { accountDir, usage };
 }
 
