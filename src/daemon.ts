@@ -240,9 +240,11 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
         state.missCount = 0;
       }
 
-      // Only sweep-check panes not already triggered/waiting (event-driven handles those)
-      const isActive = state?.status === 'waiting';
-      if (!isActive && !inProgress.has(paneId)) {
+      // Sweep checks ALL live panes not already in-flight — including 'waiting' ones.
+      // Events (output_matched, agent_status) do NOT re-fire for static rate-limited
+      // panes, so the sweep is the only mechanism that detects waitUntil elapsing
+      // and fires inject. inProgress dedup prevents concurrent redundant checks.
+      if (!inProgress.has(paneId)) {
         checks.push(checkPane(paneId));
       }
     }

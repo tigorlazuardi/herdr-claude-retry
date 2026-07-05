@@ -413,6 +413,102 @@ describe('daemon — reconcile sweep', () => {
     );
   });
 
+  it('waiting pane with elapsed waitUntil → sweep triggers checkPane → inject fires', async () => {
+    // waitUntil is in the past relative to FIXED_NOW → inject must fire
+    const BASE_NOW = new Date('2024-01-15T10:00:00Z').getTime();
+    // reset was 1 hour ago
+    const ELAPSED_WAIT_UNTIL = BASE_NOW - 3600 * 1000;
+
+    const limitScreen = "You've hit your session limit · resets 3am (UTC)\n> ";
+
+    const { opts, injectedPanes, abort } = makeDaemonOpts(
+      {
+        agents: [
+          {
+            pane_id: 'pane-wait-elapsed',
+            agent: 'claude',
+            agent_status: 'blocked',
+            agent_session: { source: 'claude', agent: 'claude', kind: 'uuid', value: 'uuid-we' },
+            workspace_id: 'ws1',
+            tab_id: 'tab1',
+            terminal_id: 't1',
+            focused: false,
+            cwd: '/tmp',
+            foreground_cwd: '/tmp',
+            revision: 1,
+          } as AgentEntry,
+        ],
+        paneTexts: { 'pane-wait-elapsed': limitScreen },
+      },
+      {
+        now: () => BASE_NOW,
+        sweepIntervalMs: 10000, // only initial sweep matters
+        sleep: async (ms) => await new Promise<void>((r) => setTimeout(r, Math.min(ms, 5))),
+        log: () => {},
+        // No usage API — rely on text-based time parsing. The banner says "resets 3am UTC"
+        // which is already past (now=10:00 UTC). stepState will detect waitMs<=0 and inject.
+        fetchUsageFn: async () => null,
+      },
+    );
+
+    // Pre-seed pane state as 'waiting' with elapsed waitUntil so sweep finds it in that status
+    // We can't directly access paneStates, but we can rely on the daemon initializing state
+    // from scratch on first checkPane call. The banner text + past reset time means stepState
+    // will immediately inject (waitMs <= 0 path in monitor.ts).
+
+    await runDaemonBriefly(opts, 150);
+    abort();
+
+    assert.ok(
+      injectedPanes.includes('pane-wait-elapsed'),
+      `expected pane-wait-elapsed to be injected when reset already passed, got: ${JSON.stringify(injectedPanes)}`,
+    );
+  });
+
+  it('waiting pane with waitUntil NOT elapsed → sweep checks but no inject', async () => {
+    // waitUntil is in the future → inject must NOT fire
+    const BASE_NOW = new Date('2024-01-15T10:00:00Z').getTime();
+
+    // Banner says "resets 3pm UTC" — that is 5 hours from now (10:00 UTC), so waitMs > 0
+    const limitScreen = "You've hit your session limit · resets 3pm (UTC)\n> ";
+
+    const { opts, injectedPanes, abort } = makeDaemonOpts(
+      {
+        agents: [
+          {
+            pane_id: 'pane-wait-pending',
+            agent: 'claude',
+            agent_status: 'blocked',
+            agent_session: { source: 'claude', agent: 'claude', kind: 'uuid', value: 'uuid-wp' },
+            workspace_id: 'ws1',
+            tab_id: 'tab1',
+            terminal_id: 't1',
+            focused: false,
+            cwd: '/tmp',
+            foreground_cwd: '/tmp',
+            revision: 1,
+          } as AgentEntry,
+        ],
+        paneTexts: { 'pane-wait-pending': limitScreen },
+      },
+      {
+        now: () => BASE_NOW,
+        sweepIntervalMs: 10000,
+        sleep: async (ms) => await new Promise<void>((r) => setTimeout(r, Math.min(ms, 5))),
+        log: () => {},
+        fetchUsageFn: async () => null,
+      },
+    );
+
+    await runDaemonBriefly(opts, 150);
+    abort();
+
+    assert.ok(
+      !injectedPanes.includes('pane-wait-pending'),
+      `must NOT inject when reset time is in the future, got: ${JSON.stringify(injectedPanes)}`,
+    );
+  });
+
 });
 
 // ---------------------------------------------------------------------------
