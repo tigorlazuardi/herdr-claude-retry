@@ -1,6 +1,6 @@
 {
   "name": "@tigorhutasuhut/herdr-claude-retry",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Herdr daemon — monitor Claude CLI sessions and auto-retry on rate-limit and errors",
   "type": "module",
   "license": "MIT",
