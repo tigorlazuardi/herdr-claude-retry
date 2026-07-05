@@ -17,7 +17,7 @@
     "dist/**/*.d.ts"
   ],
   "bin": {
-    "herdr": "dist/cli.js"
+    "herdr-claude-retry": "dist/cli.js"
   },
   "publishConfig": {
     "access": "public",

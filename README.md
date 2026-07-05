@@ -19,23 +19,24 @@ Zero polling — event-driven via herdr's socket API.
 npm install -g @tigorhutasuhut/herdr-claude-retry
 ```
 
-The installed command is `herdr`.
+The installed command is `herdr-claude-retry`.
 
 ## Usage
 
 Run as a foreground daemon in its own herdr pane (the daemon excludes its own pane from monitoring):
 
 ```bash
-herdr start
+herdr-claude-retry start
 ```
 
 ### Options
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--socket <path>` | `$HERDR_SOCKET_PATH` or `~/.config/herdr/herdr.sock` | herdr socket path |
+| `--socket-path <path>` | `$HERDR_SOCKET_PATH` or `~/.config/herdr/herdr.sock` | herdr socket path |
 | `--margin-seconds <n>` | `60` | Extra seconds to wait after reset time before injecting |
-| `--sweep-interval-ms <n>` | `300000` | Reconcile sweep interval (ms) |
+| `--sweep-interval <n>` | `300` | Reconcile sweep interval (seconds) |
+| `--log-level <level>` | `info` | Minimum log level: `debug`, `info`, `warn`, `error` |
 
 ### What it watches
 
