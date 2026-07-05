@@ -5,6 +5,10 @@
   "type": "module",
   "license": "MIT",
   "author": "Tigor Hutasuhut <tigor.hutasuhut@gmail.com>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tigorlazuardi/herdr-claude-retry.git"
+  },
   "engines": {
     "node": ">=20"
   },
