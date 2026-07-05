@@ -19,17 +19,6 @@ import type { MonitorState, PaneStates, Logger } from './monitor.ts';
 
 export interface DaemonOpts {
   client: HerdrClient;
-  /**
-   * Separate client used exclusively for event subscriptions.
-   *
-   * herdr closes any connection that sends non-subscribe requests after
-   * `events.subscribe` — so requests (pane.read, agent.list, inject) and the
-   * subscription stream must use different sockets. When provided, `client` is
-   * used only for regular requests and `subscribeClient` is used only for
-   * `events.subscribe`. Both must already be connected. Defaults to `client`
-   * when omitted (fine for unit tests with a mock that handles both).
-   */
-  subscribeClient?: HerdrClient;
   /** Override account dir discovery. */
   accountDirs?: string[];
   /** Extra seconds after resetsAt before injecting. Default 60. */
@@ -123,7 +112,6 @@ async function resolveUsage(
 export async function runDaemon(opts: DaemonOpts): Promise<void> {
   const {
     client,
-    subscribeClient = client,
     marginSeconds = 60,
     sweepIntervalMs = 5 * 60 * 1000,
     signal,
@@ -266,11 +254,17 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
   // -------------------------------------------------------------------------
 
   let currentPaneIds: string[] = [];
+  // Tracks every pane id ever seen via pane_created — persists across resubscribes.
+  // Used to detect historical replays: first sighting of a pane id may trigger a
+  // resubscribe (new pane joined), subsequent sightings are always replays → ignored.
+  const knownCreatedPaneIds = new Set<string>();
 
   async function buildSubscriptions(): Promise<import('./herdr.ts').SubscriptionSpec[]> {
     let agents: AgentEntry[] = [];
     try { agents = await client.agentList(); } catch { /* sweep will catch it */ }
     currentPaneIds = agents.map((a) => a.pane_id);
+    // Seed knownCreatedPaneIds from live panes so initial replays are ignored.
+    for (const id of currentPaneIds) knownCreatedPaneIds.add(id);
     const subs: import('./herdr.ts').SubscriptionSpec[] = [
       ...currentPaneIds.map((paneId) => ({
         type: 'pane.output_matched' as const,
@@ -302,7 +296,7 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
       // Any other generator exit (socket close, pane.created) → restart.
       let shouldStop = false;
       try {
-        const events = subscribeClient.subscribe(subs, innerSignal);
+        const events = client.subscribe(subs, innerSignal);
         for await (const ev of events) {
           if (signal?.aborted) { shouldStop = true; break; }
 
@@ -318,9 +312,29 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
             }
           } else if (ev.event === 'pane_created') {
             const paneId = ev.data.pane?.pane_id;
-            log(`${paneId ?? 'unknown'} — pane created, resubscribing`);
-            innerAc.abort();
-            break;
+            if (paneId && knownCreatedPaneIds.has(paneId)) {
+              // Already seen this pane_created — historical replay, ignore.
+              // No log to avoid spam from long history backlogs.
+            } else {
+              // First time seeing this pane_created. Check if pane is actually live
+              // before resubscribing — historical replays for long-dead panes would
+              // otherwise trigger N resubscribes on startup.
+              if (paneId) knownCreatedPaneIds.add(paneId);
+              let isLive = false;
+              try {
+                const live = await client.agentList();
+                isLive = live.some((a) => a.pane_id === paneId);
+                // Also seed known set from current live panes to prevent future replays.
+                for (const a of live) knownCreatedPaneIds.add(a.pane_id);
+              } catch { /* treat as not live */ }
+              if (isLive) {
+                log(`${paneId} — pane created, resubscribing`);
+                innerAc.abort();
+                break;
+              } else {
+                log(`${paneId ?? 'unknown'} — pane_created for dead/historical pane, ignoring`);
+              }
+            }
           } else if (ev.event === 'pane_closed') {
             const paneId = ev.data.pane_id;
             log(`${paneId} — pane closed, dropping state`);
@@ -341,17 +355,6 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
       await sleep(500);
     }
   }
-
-  // -------------------------------------------------------------------------
-  // Reconnect-aware sweep: run sweep on connect/reconnect
-  // -------------------------------------------------------------------------
-
-  const prevReconnect = client.onReconnect;
-  client.onReconnect = () => {
-    prevReconnect?.();
-    log('reconnected — triggering immediate reconcile sweep');
-    reconcileSweep().catch((e) => log(`sweep error after reconnect: ${e}`));
-  };
 
   // -------------------------------------------------------------------------
   // Periodic sweep timer

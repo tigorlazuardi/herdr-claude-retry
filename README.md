@@ -82,9 +82,9 @@ npm run verify         # typecheck + test + build (publish gate)
 npm run e2e            # acceptance test — needs live herdr
 ```
 
-The e2e test (`test/e2e/blocked-pane.e2e.ts`) creates a temporary herdr workspace, sends a
-rate-limit banner to its root pane, runs the daemon against it, and asserts the daemon detects the
-banner. It skips gracefully if no herdr socket is found.
+The e2e test (`test/e2e/blocked-pane.e2e.ts`) verifies live connectivity to the herdr socket:
+connects, lists agents, reads all live panes (the core one-shot protocol fix), and runs a daemon
+reconcile sweep asserting zero paneRead failures. Skips gracefully if no herdr socket is found.
 
 ## Publishing
 

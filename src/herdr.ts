@@ -1,8 +1,17 @@
 /**
  * herdr.ts — NDJSON socket client for the herdr daemon.
  *
- * Connects to the herdr UNIX socket, sends JSON-RPC-style requests,
- * and exposes subscription streams as async iterators.
+ * Protocol reality (herdr 0.7.1): every connection is one-shot — the server
+ * closes after ONE request-response. Subscribe connections stay open for the
+ * event stream but must NOT send a second request (kills the connection).
+ *
+ * Design:
+ *   request()   — opens a fresh socket per call, reads one response, destroys.
+ *   subscribe() — opens a dedicated socket per call, sends events.subscribe,
+ *                 awaits subscription_started, then yields events until the
+ *                 socket closes or the abort signal fires.
+ *   connect()   — connectivity check (open + close a socket).
+ *   destroy()   — aborts all live subscribe streams; prevents further use.
  */
 
 import { createConnection, type Socket } from 'node:net';
@@ -118,11 +127,6 @@ interface HerdrResponse {
   error?: { code: string; message: string };
 }
 
-interface HerdrRawEvent {
-  event: string;
-  data: unknown;
-}
-
 // Connect factory type (dependency-injected for testing)
 export type ConnectFn = (path: string) => Socket;
 
@@ -140,164 +144,131 @@ function defaultSocketPath(): string {
 // HerdrClient
 // ---------------------------------------------------------------------------
 
+/** Default per-request timeout in milliseconds. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
+
 export class HerdrClient {
   private readonly socketPath: string;
   private readonly connectFn: ConnectFn;
-  private socket: Socket | null = null;
-  private buffer = '';
-  private pendingRequests = new Map<
-    string,
-    { resolve: (v: unknown) => void; reject: (e: Error) => void }
-  >();
-  private eventListeners: Array<(ev: HerdrRawEvent) => void> = [];
-  private reconnectDelay = 1000;
-  private readonly maxDelay = 60_000;
   private destroyed = false;
-
-  onReconnect?: () => void;
+  /** AbortControllers for active subscribe streams — destroy() aborts all. */
+  private readonly subscribeAborts = new Set<AbortController>();
 
   constructor(opts?: {
     socketPath?: string;
     connectFn?: ConnectFn;
-    onReconnect?: () => void;
   }) {
     this.socketPath = opts?.socketPath ?? defaultSocketPath();
     this.connectFn = opts?.connectFn ?? ((p: string) => createConnection(p));
-    if (opts?.onReconnect) this.onReconnect = opts.onReconnect;
   }
 
   // -------------------------------------------------------------------------
-  // Connection management
+  // Connectivity check
   // -------------------------------------------------------------------------
 
+  /**
+   * Open a connection and immediately close it. Rejects if the socket is
+   * unreachable. Used by cli.ts startup validation.
+   */
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
+      if (this.destroyed) {
+        reject(new Error('Client destroyed'));
+        return;
+      }
       const sock = this.connectFn(this.socketPath);
-      this.socket = sock;
-      this.buffer = '';
-
       sock.setEncoding('utf8');
-
       sock.once('connect', () => {
-        this.reconnectDelay = 1000;
+        sock.destroy();
         resolve();
       });
-
       sock.once('error', (err) => {
         reject(err);
-      });
-
-      sock.on('data', (chunk: string) => {
-        this.buffer += chunk;
-        this.processBuffer();
-      });
-
-      sock.on('close', () => {
-        if (!this.destroyed) {
-          this.scheduleReconnect();
-        }
       });
     });
   }
 
-  private processBuffer(): void {
-    const lines = this.buffer.split('\n');
-    // Last element may be incomplete — keep in buffer
-    this.buffer = lines.pop() ?? '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed) continue;
-      try {
-        const msg = JSON.parse(trimmed) as Record<string, unknown>;
-        this.handleMessage(msg);
-      } catch {
-        // Malformed line — skip
-      }
-    }
-  }
-
-  private handleMessage(msg: Record<string, unknown>): void {
-    if ('event' in msg) {
-      // Push to all event listeners
-      const ev = msg as unknown as HerdrRawEvent;
-      for (const listener of this.eventListeners) {
-        listener(ev);
-      }
-      return;
-    }
-
-    if ('id' in msg) {
-      const resp = msg as unknown as HerdrResponse;
-      const pending = this.pendingRequests.get(resp.id);
-      if (!pending) return;
-      this.pendingRequests.delete(resp.id);
-      if (resp.error) {
-        pending.reject(
-          new HerdrError(resp.error.code, resp.error.message),
-        );
-      } else {
-        pending.resolve(resp.result);
-      }
-    }
-  }
-
-  private scheduleReconnect(): void {
-    // Reject all pending requests on disconnect
-    for (const [, { reject }] of this.pendingRequests) {
-      reject(new Error('Socket disconnected'));
-    }
-    this.pendingRequests.clear();
-
-    const delay = this.reconnectDelay;
-    this.reconnectDelay = Math.min(this.reconnectDelay * 2, this.maxDelay);
-
-    setTimeout(() => {
-      if (this.destroyed) return;
-      this.connect()
-        .then(() => {
-          this.onReconnect?.();
-        })
-        .catch(() => {
-          // scheduleReconnect will be triggered again by close event
-        });
-    }, delay);
-  }
-
   destroy(): void {
     this.destroyed = true;
-    this.socket?.destroy();
-    this.socket = null;
-    for (const [, { reject }] of this.pendingRequests) {
-      reject(new Error('Client destroyed'));
+    for (const ac of this.subscribeAborts) {
+      ac.abort();
     }
-    this.pendingRequests.clear();
+    this.subscribeAborts.clear();
   }
 
   // -------------------------------------------------------------------------
-  // Raw request
+  // Raw request — one fresh socket per call
   // -------------------------------------------------------------------------
 
-  private request<T>(method: string, params: Record<string, unknown>): Promise<T> {
+  private request<T>(
+    method: string,
+    params: Record<string, unknown>,
+    timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS,
+  ): Promise<T> {
     return new Promise((resolve, reject) => {
-      if (!this.socket || this.socket.destroyed) {
-        reject(new Error('Not connected'));
+      if (this.destroyed) {
+        reject(new Error('Client destroyed'));
         return;
       }
 
-      const id = randomUUID();
-      const line = JSON.stringify({ id, method, params }) + '\n';
+      const sock = this.connectFn(this.socketPath);
+      sock.setEncoding('utf8');
 
-      this.pendingRequests.set(id, {
-        resolve: (v) => resolve(v as T),
-        reject,
+      let settled = false;
+      let buffer = '';
+      const id = randomUUID();
+
+      const done = (err: Error | null, value?: T) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        sock.destroy();
+        if (err) {
+          reject(err);
+        } else {
+          resolve(value as T);
+        }
+      };
+
+      const timer = setTimeout(() => {
+        done(new Error(`Request timed out after ${timeoutMs}ms`));
+      }, timeoutMs);
+
+      sock.once('error', (err) => done(err));
+
+      sock.on('close', () => {
+        done(new Error('Socket closed before response'));
       });
 
-      this.socket.write(line, (err) => {
-        if (err) {
-          this.pendingRequests.delete(id);
-          reject(err);
+      sock.on('data', (chunk: string) => {
+        buffer += chunk;
+        const lines = buffer.split('\n');
+        buffer = lines.pop() ?? '';
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+          let msg: Record<string, unknown>;
+          try {
+            msg = JSON.parse(trimmed) as Record<string, unknown>;
+          } catch {
+            continue;
+          }
+          if ('id' in msg && msg['id'] === id) {
+            const resp = msg as unknown as HerdrResponse;
+            if (resp.error) {
+              done(new HerdrError(resp.error.code, resp.error.message));
+            } else {
+              done(null, resp.result as T);
+            }
+          }
         }
+      });
+
+      sock.once('connect', () => {
+        const line = JSON.stringify({ id, method, params }) + '\n';
+        sock.write(line, (err) => {
+          if (err) done(err);
+        });
       });
     });
   }
@@ -352,59 +323,136 @@ export class HerdrClient {
   }
 
   // -------------------------------------------------------------------------
-  // Subscription streaming
+  // Subscription streaming — dedicated fresh socket per call
   // -------------------------------------------------------------------------
 
   /**
    * Subscribe to a set of event types and return an async iterator of typed events.
-   * The iterator ends when `signal` is aborted or the client is destroyed.
+   *
+   * Opens a dedicated socket, sends events.subscribe, awaits subscription_started,
+   * then yields events. The generator ends when:
+   *   - the socket closes (server side)
+   *   - `signal` is aborted
+   *   - destroy() is called on this client
    */
   async *subscribe(
     subscriptions: SubscriptionSpec[],
     signal?: AbortSignal,
   ): AsyncGenerator<HerdrEvent> {
-    if (!this.socket || this.socket.destroyed) {
-      throw new Error('Not connected');
+    if (this.destroyed) {
+      throw new Error('Client destroyed');
     }
 
-    const id = randomUUID();
-    const line = JSON.stringify({ id, method: 'events.subscribe', params: { subscriptions } }) + '\n';
+    const internalAc = new AbortController();
+    this.subscribeAborts.add(internalAc);
 
-    // Wait for subscription_started
-    const started = new Promise<void>((resolve, reject) => {
-      this.pendingRequests.set(id, {
-        resolve: () => resolve(),
-        reject,
-      });
+    const effectiveSignal = signal
+      ? AbortSignal.any([signal, internalAc.signal])
+      : internalAc.signal;
+
+    try {
+      yield* this._subscribeOnSocket(subscriptions, effectiveSignal);
+    } finally {
+      this.subscribeAborts.delete(internalAc);
+    }
+  }
+
+  private async *_subscribeOnSocket(
+    subscriptions: SubscriptionSpec[],
+    signal: AbortSignal,
+  ): AsyncGenerator<HerdrEvent> {
+    if (signal.aborted) return;
+
+    const sock = this.connectFn(this.socketPath);
+    sock.setEncoding('utf8');
+
+    // Wait for socket connect
+    await new Promise<void>((resolve, reject) => {
+      if (signal.aborted) {
+        sock.destroy();
+        reject(new Error('Aborted before connect'));
+        return;
+      }
+      sock.once('connect', resolve);
+      sock.once('error', reject);
     });
 
-    this.socket.write(line);
-    await started;
+    if (signal.aborted) {
+      sock.destroy();
+      return;
+    }
 
-    // Now yield events until aborted
+    // Send subscribe request and wait for subscription_started
+    const id = randomUUID();
+    const reqLine = JSON.stringify({ id, method: 'events.subscribe', params: { subscriptions } }) + '\n';
+
+    await new Promise<void>((resolve, reject) => {
+      let startedBuffer = '';
+
+      const onData = (chunk: string) => {
+        startedBuffer += chunk;
+        const lines = startedBuffer.split('\n');
+        startedBuffer = lines.pop() ?? '';
+        for (const l of lines) {
+          const trimmed = l.trim();
+          if (!trimmed) continue;
+          let msg: Record<string, unknown>;
+          try { msg = JSON.parse(trimmed) as Record<string, unknown>; } catch { continue; }
+          if ('id' in msg && msg['id'] === id) {
+            sock.removeListener('data', onData);
+            const resp = msg as unknown as HerdrResponse;
+            if (resp.error) {
+              reject(new HerdrError(resp.error.code, resp.error.message));
+            } else {
+              resolve();
+            }
+          }
+        }
+      };
+
+      sock.on('data', onData);
+      sock.once('error', reject);
+      sock.write(reqLine);
+    });
+
+    if (signal.aborted) {
+      sock.destroy();
+      return;
+    }
+
+    // Yield events until socket closes or signal aborts
     const queue: HerdrEvent[] = [];
     let notify: (() => void) | null = null;
     let done = false;
+    let streamBuf = '';
 
-    const listener = (ev: HerdrRawEvent) => {
-      queue.push(ev as unknown as HerdrEvent);
-      notify?.();
+    const onStreamData = (chunk: string) => {
+      streamBuf += chunk;
+      const lines = streamBuf.split('\n');
+      streamBuf = lines.pop() ?? '';
+      for (const l of lines) {
+        const trimmed = l.trim();
+        if (!trimmed) continue;
+        let msg: Record<string, unknown>;
+        try { msg = JSON.parse(trimmed) as Record<string, unknown>; } catch { continue; }
+        if ('event' in msg) {
+          queue.push(msg as unknown as HerdrEvent);
+          notify?.();
+        }
+      }
     };
-
-    this.eventListeners.push(listener);
 
     const cleanup = () => {
+      if (done) return;
       done = true;
-      this.eventListeners = this.eventListeners.filter((l) => l !== listener);
+      sock.removeListener('data', onStreamData);
       notify?.();
     };
 
-    signal?.addEventListener('abort', cleanup, { once: true });
-
-    // Capture the socket active at subscribe time. If it closes (reconnect),
-    // terminate this generator so the caller can resubscribe on the new socket.
-    const subscribedSocket = this.socket;
-    subscribedSocket?.once('close', cleanup);
+    sock.on('data', onStreamData);
+    sock.once('close', cleanup);
+    sock.once('error', cleanup);
+    signal.addEventListener('abort', cleanup, { once: true });
 
     try {
       while (!done) {
@@ -414,15 +462,14 @@ export class HerdrClient {
         if (done) break;
         await new Promise<void>((res) => {
           notify = res;
-          // If items arrived while we were setting notify, flush immediately
           if (queue.length > 0 || done) res();
         });
         notify = null;
       }
     } finally {
       cleanup();
-      subscribedSocket?.removeListener('close', cleanup);
-      signal?.removeEventListener('abort', cleanup);
+      sock.destroy();
+      signal.removeEventListener('abort', cleanup);
     }
   }
 

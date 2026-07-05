@@ -44,8 +44,6 @@ function makeMockClient(opts: MockClientOpts = {}): {
   let emitter: EventEmitter | null = null;
 
   const client = {
-    onReconnect: undefined as (() => void) | undefined,
-
     async agentList(): Promise<AgentEntry[]> {
       return opts.agents ?? [];
     },
@@ -415,34 +413,6 @@ describe('daemon — reconcile sweep', () => {
     );
   });
 
-  it('reconnect triggers immediate reconcile sweep', async () => {
-    const FIXED_NOW = new Date('2024-01-15T10:00:00Z').getTime();
-    const logMsgs: string[] = [];
-
-    const { opts, abort, signal } = makeDaemonOpts(
-      { agents: [], paneTexts: {} },
-      {
-        now: () => FIXED_NOW,
-        sweepIntervalMs: 60000, // very long, so only reconnect-triggered sweep counts
-        sleep: async (ms) => await new Promise<void>((r) => setTimeout(r, Math.min(ms, 5))),
-        log: (msg) => logMsgs.push(msg),
-      },
-    );
-
-    const daemonPromise = runDaemon(opts);
-    await new Promise<void>((r) => setTimeout(r, 30));
-
-    // Simulate reconnect
-    opts.client.onReconnect?.();
-
-    await new Promise<void>((r) => setTimeout(r, 30));
-    abort();
-    await daemonPromise.catch(() => {});
-
-    const sweepMsgs = logMsgs.filter((m) => m.includes('reconcile'));
-    // Should have at least 2 sweeps: initial + reconnect-triggered
-    assert.ok(sweepMsgs.length >= 2, `expected ≥2 reconcile sweeps, got ${sweepMsgs.length}: ${JSON.stringify(sweepMsgs)}`);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -673,6 +643,154 @@ describe('daemon — pane lifecycle', () => {
     assert.ok(
       logMsgs.some((m) => m.includes('pane-lifecycle') && m.includes('closed')),
       `expected closed log, got: ${JSON.stringify(logMsgs)}`,
+    );
+  });
+
+  it('pane_created for already-subscribed pane → no resubscribe (replay guard)', async () => {
+    const FIXED_NOW = new Date('2024-01-15T10:00:00Z').getTime();
+    const subscribeCallCount: number[] = [];
+
+    const existingAgent: AgentEntry = {
+      pane_id: 'pane-existing',
+      agent: 'claude',
+      agent_status: 'idle',
+      agent_session: { source: 'claude', agent: 'claude', kind: 'uuid', value: 'uuid-ex' },
+      workspace_id: 'ws1',
+      tab_id: 'tab1',
+      terminal_id: 't1',
+      focused: false,
+      cwd: '/tmp',
+      foreground_cwd: '/tmp',
+      revision: 1,
+    } as AgentEntry;
+
+    const { opts, emitEvent, abort } = makeDaemonOpts(
+      { agents: [existingAgent], paneTexts: {} },
+      {
+        now: () => FIXED_NOW,
+        sweepIntervalMs: 60000,
+        sleep: async (ms) => await new Promise<void>((r) => setTimeout(r, Math.min(ms, 5))),
+        log: () => {},
+      },
+    );
+
+    // Intercept subscribe to count calls
+    const origSubscribe = opts.client.subscribe.bind(opts.client);
+    (opts.client as unknown as { subscribe: typeof opts.client.subscribe }).subscribe =
+      async function* (subs: SubscriptionSpec[], signal?: AbortSignal): AsyncGenerator<HerdrEvent> {
+        subscribeCallCount.push(1);
+        yield* origSubscribe(subs, signal);
+      };
+
+    const daemonPromise = runDaemon(opts);
+    // Let daemon subscribe
+    await new Promise<void>((r) => setTimeout(r, 30));
+
+    // Emit pane_created for the same pane already seeded into knownCreatedPaneIds.
+    // The guard must silently ignore it without resubscribing.
+    emitEvent({
+      event: 'pane_created',
+      data: {
+        pane: existingAgent,
+        type: 'pane_created',
+      },
+    });
+
+    await new Promise<void>((r) => setTimeout(r, 30));
+    abort();
+    await daemonPromise.catch(() => {});
+
+    // subscribe must have been called only once — replayed pane must NOT trigger resubscribe
+    assert.equal(subscribeCallCount.length, 1, 'replayed pane_created must NOT trigger resubscribe');
+  });
+
+  it('pane_created for genuinely new pane → resubscribe triggered', async () => {
+    const FIXED_NOW = new Date('2024-01-15T10:00:00Z').getTime();
+    const logMsgs: string[] = [];
+    const subscribeCallCount: number[] = [];
+
+    const existingAgent: AgentEntry = {
+      pane_id: 'pane-old',
+      agent: 'claude',
+      agent_status: 'idle',
+      agent_session: { source: 'claude', agent: 'claude', kind: 'uuid', value: 'uuid-old' },
+      workspace_id: 'ws1',
+      tab_id: 'tab1',
+      terminal_id: 't1',
+      focused: false,
+      cwd: '/tmp',
+      foreground_cwd: '/tmp',
+      revision: 1,
+    } as AgentEntry;
+
+    const newAgent: AgentEntry = {
+      pane_id: 'pane-new',
+      agent: 'claude',
+      agent_status: 'idle',
+      agent_session: { source: 'claude', agent: 'claude', kind: 'uuid', value: 'uuid-new' },
+      workspace_id: 'ws1',
+      tab_id: 'tab2',
+      terminal_id: 't2',
+      focused: false,
+      cwd: '/tmp',
+      foreground_cwd: '/tmp',
+      revision: 1,
+    } as AgentEntry;
+
+    // agentList starts with only existingAgent; after pane_created for newAgent is
+    // emitted, it should return both (simulating the new pane being live).
+    let newPaneVisible = false;
+
+    const { opts, emitEvent, abort } = makeDaemonOpts(
+      { agents: [existingAgent], paneTexts: {} },
+      {
+        now: () => FIXED_NOW,
+        sweepIntervalMs: 60000,
+        sleep: async (ms) => await new Promise<void>((r) => setTimeout(r, Math.min(ms, 5))),
+        log: (msg) => logMsgs.push(msg),
+      },
+    );
+
+    // Override agentList to include newAgent once newPaneVisible is set
+    (opts.client as unknown as { agentList: () => Promise<AgentEntry[]> }).agentList =
+      async () => newPaneVisible ? [existingAgent, newAgent] : [existingAgent];
+
+    // Intercept subscribe to count calls
+    const origSubscribe = opts.client.subscribe.bind(opts.client);
+    (opts.client as unknown as { subscribe: typeof opts.client.subscribe }).subscribe =
+      async function* (subs: SubscriptionSpec[], signal?: AbortSignal): AsyncGenerator<HerdrEvent> {
+        subscribeCallCount.push(1);
+        yield* origSubscribe(subs, signal);
+      };
+
+    const daemonPromise = runDaemon(opts);
+    // Let daemon subscribe
+    await new Promise<void>((r) => setTimeout(r, 30));
+
+    // Mark new pane as live, then emit pane_created for it
+    newPaneVisible = true;
+    emitEvent({
+      event: 'pane_created',
+      data: {
+        pane: newAgent,
+        type: 'pane_created',
+      },
+    });
+
+    // Give time for liveness check + resubscribe cycle
+    await new Promise<void>((r) => setTimeout(r, 80));
+    abort();
+    await daemonPromise.catch(() => {});
+
+    // subscribe must have been called more than once (resubscribed for new pane)
+    assert.ok(
+      subscribeCallCount.length >= 2,
+      `new pane_created must trigger resubscribe, subscribe called ${subscribeCallCount.length} time(s)`,
+    );
+    // Must have logged the resubscribing message
+    assert.ok(
+      logMsgs.some((m) => m.includes('pane-new') && m.includes('resubscribing')),
+      `expected resubscribing log for new pane, got: ${JSON.stringify(logMsgs)}`,
     );
   });
 });
