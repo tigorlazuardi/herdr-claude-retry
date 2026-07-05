@@ -1,0 +1,1 @@
+{"id":"","error":{"code":"invalid_request","message":"invalid request: unknown variant `pane.run`, expected one of `ping`, `server.stop`, ..., `pane.send_text`, `pane.send_keys`, `pane.send_input`, `pane.read`, `events.subscribe`, `events.wait`, `pane.wait_for_output`, ..."}}
