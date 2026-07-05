@@ -526,6 +526,67 @@ describe('HerdrClient', () => {
       assert.equal(getDelay(), 60_000); // stays capped
     });
 
+    it('subscribe stream ends when underlying socket closes mid-stream', async () => {
+      const subStartedFixture = fixture('events-subscribe-subscription-started.json');
+      const socketPath = join(tmpdir(), `herdr-test-sub-close-${Date.now()}.sock`);
+
+      // Server: ack subscribe, then close the socket after a short delay
+      const server = createServer((sock) => {
+        let buf = '';
+        sock.setEncoding('utf8');
+        sock.on('data', (chunk: string) => {
+          buf += chunk;
+          const lines = buf.split('\n');
+          buf = lines.pop() ?? '';
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            const req = JSON.parse(trimmed) as { id: string; method: string };
+            if (req.method === 'events.subscribe') {
+              const started = JSON.parse(subStartedFixture) as { id: string };
+              started.id = req.id;
+              sock.write(JSON.stringify(started) + '\n');
+              // Close socket after ack — simulates reconnect/drop
+              setTimeout(() => sock.destroy(), 30);
+            }
+          }
+        });
+      });
+
+      await new Promise<void>((resolve, reject) => {
+        server.listen(socketPath, () => resolve());
+        server.once('error', reject);
+      });
+
+      const connectFn: ConnectFn = () => connect(socketPath);
+      const client = new HerdrClient({ connectFn });
+      // Large reconnect delay so reconnect doesn't fire during test
+      (client as unknown as { reconnectDelay: number }).reconnectDelay = 99_999_999;
+
+      const ac = new AbortController();
+      try {
+        await client.connect();
+
+        // subscribe — generator should end (not hang) when socket closes
+        const raceResult = await Promise.race([
+          (async () => {
+            for await (const _ev of client.subscribe([{ type: 'pane.agent_status_changed' }], ac.signal)) {
+              // no events expected before close
+            }
+            return 'ended';
+          })(),
+          new Promise<string>((r) => setTimeout(() => r('timeout'), 500)),
+        ]);
+
+        assert.equal(raceResult, 'ended', 'subscribe generator must end when socket closes, not hang');
+      } finally {
+        ac.abort();
+        client.destroy();
+        await new Promise<void>((res) => server.close(() => res()));
+        await unlink(socketPath).catch(() => {});
+      }
+    });
+
     it('pending requests rejected on disconnect', async () => {
       const socketPath = join(tmpdir(), `herdr-test-disconnect-${Date.now()}.sock`);
 

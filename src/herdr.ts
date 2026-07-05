@@ -401,6 +401,11 @@ export class HerdrClient {
 
     signal?.addEventListener('abort', cleanup, { once: true });
 
+    // Capture the socket active at subscribe time. If it closes (reconnect),
+    // terminate this generator so the caller can resubscribe on the new socket.
+    const subscribedSocket = this.socket;
+    subscribedSocket?.once('close', cleanup);
+
     try {
       while (!done) {
         while (queue.length > 0) {
@@ -416,6 +421,7 @@ export class HerdrClient {
       }
     } finally {
       cleanup();
+      subscribedSocket?.removeListener('close', cleanup);
       signal?.removeEventListener('abort', cleanup);
     }
   }

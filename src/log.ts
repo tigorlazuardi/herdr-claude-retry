@@ -5,7 +5,7 @@
  * Sensitive-data rules:
  *   Tier A: tokens NEVER logged (enforced by callers — this module has no token access).
  *   Tier B: account_dir, pane/workspace/session ids — visible by default.
- *   Tier D: pane screen content — NOT logged unless debugScreens enabled.
+ *   Tier C: pane screen content — NOT logged.
  */
 
 // ---------------------------------------------------------------------------
@@ -43,13 +43,6 @@ const LEVELS: Record<LogRecord['level'], number> = {
 export function makeLogger(opts?: {
   /** Minimum level to emit. Default 'info'. */
   level?: LogRecord['level'];
-  /**
-   * If true, callers may include screen content in limit.detected events.
-   * Only has effect when the caller explicitly passes the content — this flag
-   * is conveyed to callers as a configuration signal; log.ts itself does not
-   * strip or inject screen content.
-   */
-  debugScreens?: boolean;
 }): LogFn {
   const minLevel = opts?.level ?? 'info';
   const minLevelNum = LEVELS[minLevel];

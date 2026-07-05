@@ -97,9 +97,12 @@ export async function stepState(
       return 'monitoring';
     }
 
-    // Account still limited with known reset → keep waitUntil aligned.
+    // Account still limited with known reset → extend waitUntil, never shrink.
     if (usage !== undefined && usage.limited && usage.resetsAtMs !== null) {
-      state.waitUntil = usage.resetsAtMs + marginMs;
+      const candidate = usage.resetsAtMs + marginMs;
+      if (candidate > state.waitUntil) {
+        state.waitUntil = candidate;
+      }
     }
 
     // Limit is over when account cleared (early/real reset) OR timer elapsed.
@@ -143,6 +146,9 @@ export async function stepState(
       if (usage.resetsAtMs !== null) {
         state.waitUntil = usage.resetsAtMs + marginMs;
         state.status = 'waiting';
+        state.apiRetries = 0;
+        state.apiNextActionAt = 0;
+        state.apiGaveUp = false;
         log(`${label} account limited, 'continue' at ${formatLocalDateTime(state.waitUntil)}`);
         return 'rate-limited';
       }
@@ -169,6 +175,9 @@ export async function stepState(
     }
     state.waitUntil = now + waitMs;
     state.status = 'waiting';
+    state.apiRetries = 0;
+    state.apiNextActionAt = 0;
+    state.apiGaveUp = false;
     return 'rate-limited';
   }
 

@@ -298,11 +298,13 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
       const subs = await buildSubscriptions();
       log(`subscribing to events for ${currentPaneIds.length} pane(s)`);
 
-      let shouldRestart = false;
+      // shouldStop: set only on intentional daemon shutdown (signal aborted).
+      // Any other generator exit (socket close, pane.created) → restart.
+      let shouldStop = false;
       try {
         const events = subscribeClient.subscribe(subs, innerSignal);
         for await (const ev of events) {
-          if (signal?.aborted) break;
+          if (signal?.aborted) { shouldStop = true; break; }
 
           if (ev.event === 'pane.output_matched') {
             const paneId = ev.data.pane_id;
@@ -317,7 +319,6 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
           } else if (ev.event === 'pane_created') {
             const paneId = ev.data.pane?.pane_id;
             log(`${paneId ?? 'unknown'} — pane created, resubscribing`);
-            shouldRestart = true;
             innerAc.abort();
             break;
           } else if (ev.event === 'pane_closed') {
@@ -333,8 +334,10 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
         }
       }
 
-      if (!shouldRestart || signal?.aborted) break;
-      // Brief pause before resubscribing to avoid tight loop on repeated pane.created
+      // Generator ended: stop only on signal; otherwise rebuild subscriptions.
+      if (shouldStop || signal?.aborted) break;
+      log('event stream ended — resubscribing');
+      // Brief pause before resubscribing (avoids tight loop on rapid reconnect)
       await sleep(500);
     }
   }
@@ -343,7 +346,9 @@ export async function runDaemon(opts: DaemonOpts): Promise<void> {
   // Reconnect-aware sweep: run sweep on connect/reconnect
   // -------------------------------------------------------------------------
 
+  const prevReconnect = client.onReconnect;
   client.onReconnect = () => {
+    prevReconnect?.();
     log('reconnected — triggering immediate reconcile sweep');
     reconcileSweep().catch((e) => log(`sweep error after reconnect: ${e}`));
   };

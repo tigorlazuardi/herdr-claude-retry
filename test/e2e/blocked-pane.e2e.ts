@@ -201,9 +201,11 @@ describe('blocked-pane e2e — text-fallback path', () => {
       logs.some((l) => l.includes('limit') || l.includes('output_matched') || l.includes('blocked')) ||
       logs.some((l) => l.includes('monitoring') || l.includes('waiting'));
 
-    // Must see inject attempt (inject logged by daemon) or state transition
+    // Must see inject attempt or explicit waiting-state transition (not just 'monitoring' startup).
+    // 'waiting' appears in log lines like "→ waiting" or "'continue' at"; 'inject' in inject calls.
     const sawInjectOrTransition =
-      logs.some((l) => l.includes('inject') || l.includes('waiting') || l.includes('banner gone'));
+      logs.some((l) => l.includes('inject') || l.includes('banner gone')) ||
+      logs.some((l) => /\bwaiting\b/.test(l) && !l.includes('starting'));
 
     console.log(`\n  === daemon log (${logs.length} entries) ===`);
     console.log(allLogs);

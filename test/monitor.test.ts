@@ -396,6 +396,103 @@ describe('stepState — full retry cycle', () => {
 });
 
 // ---------------------------------------------------------------------------
+// F3: waitUntil must never shrink (guard against resetsAt moving backward)
+// ---------------------------------------------------------------------------
+
+describe('stepState — waitUntil never shrinks', () => {
+  it('resetsAt moving earlier does not shrink waitUntil', async () => {
+    const state = createState();
+    state.status = 'waiting';
+    const marginSeconds = 60;
+    const marginMs = marginSeconds * 1000;
+    // Set waitUntil to a future time via a far-future reset
+    const farReset = FIXED_NOW + 4 * 3600_000;
+    state.waitUntil = farReset + marginMs;
+
+    const t = tracker();
+    // Now provide a usage with an earlier resetsAtMs (moving backward)
+    const earlierReset = FIXED_NOW + 1 * 3600_000;
+    const status = await stepState(
+      state, 'p1',
+      '5-hour limit reached\nresets 3pm (UTC)',
+      FIXED_NOW, t.inject,
+      { marginSeconds, usage: { limited: true, resetsAtMs: earlierReset } },
+    );
+
+    assert.equal(status, 'rate-limited');
+    assert.equal(state.status, 'waiting');
+    // waitUntil must NOT have shrunk to earlierReset + margin
+    assert.equal(
+      state.waitUntil,
+      farReset + marginMs,
+      'waitUntil must not shrink when resetsAt moves earlier',
+    );
+    assert.equal(t.calls, 0);
+  });
+
+  it('resetsAt moving later extends waitUntil', async () => {
+    const state = createState();
+    state.status = 'waiting';
+    const marginSeconds = 60;
+    const marginMs = marginSeconds * 1000;
+    const nearReset = FIXED_NOW + 1 * 3600_000;
+    state.waitUntil = nearReset + marginMs;
+
+    const t = tracker();
+    const laterReset = FIXED_NOW + 4 * 3600_000;
+    const status = await stepState(
+      state, 'p1',
+      '5-hour limit reached\nresets 3pm (UTC)',
+      FIXED_NOW, t.inject,
+      { marginSeconds, usage: { limited: true, resetsAtMs: laterReset } },
+    );
+
+    assert.equal(status, 'rate-limited');
+    assert.equal(state.waitUntil, laterReset + marginMs, 'waitUntil must extend when reset moves later');
+    assert.equal(t.calls, 0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F4: api* retry state reset on transition to waiting
+// ---------------------------------------------------------------------------
+
+describe('stepState — api retry state reset on rate-limit', () => {
+  it('api-error gave-up → rate-limit cycle → new api-error retries again', async () => {
+    const state = createState();
+    // Simulate: api-error that gave up
+    state.apiRetries = 5;
+    state.apiNextActionAt = FIXED_NOW + 10_000;
+    state.apiGaveUp = true;
+
+    // Now see a rate-limit banner — should transition to waiting and reset api* fields
+    const t = tracker();
+    const limitScreen = '5-hour limit reached\nresets 3pm (UTC)';
+    const s1 = await stepState(state, 'p1', limitScreen, FIXED_NOW, t.inject);
+    assert.equal(s1, 'rate-limited');
+    assert.equal(state.status, 'waiting');
+    assert.equal(state.apiRetries, 0, 'apiRetries must reset on waiting transition');
+    assert.equal(state.apiNextActionAt, 0, 'apiNextActionAt must reset on waiting transition');
+    assert.equal(state.apiGaveUp, false, 'apiGaveUp must reset on waiting transition');
+
+    // Simulate rate-limit resolved: banner gone
+    state.status = 'monitoring';
+    state.waitUntil = 0;
+
+    // Now see api-error again — should arm backoff, not be stuck in gave-up
+    const API_ERR_SCREEN =
+      'Some prior output\n' +
+      'API Error: Connection closed mid-response. The response above may be incomplete.\n' +
+      '> ';
+    const s2 = await stepState(state, 'p1', API_ERR_SCREEN, FIXED_NOW, t.inject);
+    assert.equal(s2, 'monitoring', 'api-error should arm backoff (not immediately inject)');
+    assert.equal(state.apiNextActionAt, FIXED_NOW + 10_000, 'backoff must be armed after reset');
+    assert.equal(state.apiGaveUp, false, 'must not be gave-up after reset');
+    assert.equal(t.calls, 0, 'must not inject on first sighting after reset');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Prose-mention guard
 // ---------------------------------------------------------------------------
 

@@ -7,7 +7,6 @@
  *     --margin-seconds <n>    default 60
  *     --sweep-interval <n>    default 300 (seconds)
  *     --log-level <level>     debug|info|warn|error; default info
- *     --debug-screens         include screen content in limit.detected (unsafe)
  *     --help                  print usage and exit 0
  */
 
@@ -34,9 +33,6 @@ Options:
                           (default: 60)
   --sweep-interval <n>    Reconcile sweep interval in seconds (default: 300)
   --log-level <level>     Minimum log level: debug|info|warn|error (default: info)
-  --debug-screens         Include pane screen content in limit.detected log events.
-                          WARNING: may log user conversation content. Do not use
-                          in production or shared environments.
   --help                  Print this help and exit
 
 Environment:
@@ -72,7 +68,6 @@ async function main(): Promise<void> {
       'margin-seconds': { type: 'string' },
       'sweep-interval': { type: 'string' },
       'log-level': { type: 'string' },
-      'debug-screens': { type: 'boolean' },
       'help': { type: 'boolean' },
     },
     strict: true,
@@ -93,10 +88,9 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const logLevel = rawLevel as Level;
-  const debugScreens = values['debug-screens'] ?? false;
 
   // Construct logger
-  const logFn = makeLogger({ level: logLevel, debugScreens });
+  const logFn = makeLogger({ level: logLevel });
 
   // Resolve socket path
   const socketPath =
