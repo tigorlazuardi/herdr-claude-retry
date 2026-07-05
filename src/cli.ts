@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * cli.ts — CLI entry point for herdr-claude-retry daemon.
  *
