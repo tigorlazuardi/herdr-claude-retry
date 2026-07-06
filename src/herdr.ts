@@ -315,11 +315,22 @@ export class HerdrClient {
   }
 
   /**
-   * Inject: Ctrl+C then send "continue\n"
+   * Inject: Ctrl+C, type "continue", then press Enter.
+   *
+   * The Enter must be a real key event via pane.send_keys — the Claude CLI
+   * input box treats a trailing "\n" inside pane.send_text as a literal
+   * newline in the (bracketed-paste) input buffer, so the text lands in the
+   * prompt but never submits. Short pauses let the TUI process each step.
    */
   async inject(pane_id: string): Promise<void> {
+    // Deliberately NOT unref'd: these are 150ms pauses mid-inject; unref'ing
+    // lets the process exit between steps when no other handle is live.
+    const pause = () => new Promise<void>((r) => setTimeout(r, 150));
     await this.paneSendKeys(pane_id, ['C-c']);
-    await this.paneSendText(pane_id, 'continue\n');
+    await pause();
+    await this.paneSendText(pane_id, 'continue');
+    await pause();
+    await this.paneSendKeys(pane_id, ['Enter']);
   }
 
   // -------------------------------------------------------------------------
