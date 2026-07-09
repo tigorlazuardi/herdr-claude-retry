@@ -2,8 +2,12 @@
 
 **Date:** 2026-07-09
 **From:** herdr-claude-retry (this repo, v0.1.8, npm `@tigorhutasuhut/herdr-claude-retry`)
-**To:** a NEW project — a herdr *plugin* (not a standalone npm daemon) that auto-resumes **any**
-herdr-supported agent after a rate limit / transient failure, not just Claude Code.
+**To:** **herdr-sheepdog** (repo `tigorlazuardi/herdr-sheepdog`) — a herdr *plugin* (not a
+standalone npm daemon) that auto-resumes **any** herdr-supported agent after a rate limit /
+transient failure, not just Claude Code. Tagline: "the sheepdog that keeps your herd moving."
+(Name rationale: watchdog only guards + alarms and is overloaded by kernel/systemd/hardware
+watchdogs; a sheepdog actively drives strays back to the herd — which is what the inject does.
+`herdr-` prefix keeps project scope and target audience visible.)
 
 ---
 
